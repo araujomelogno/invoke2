@@ -17,6 +17,7 @@ El antecedente propio es INVOKE, el CATI que Equipos desarrolló alrededor de 20
 | `invoke-cati` | Puesto del encuestador | Eclipse RCP / SWT | 25.700 |
 | `invoke-manager` | Back-office, reportes, exportación | Struts 1.2.4, 89 JSP, JasperReports | 31.300 |
 | `invoke-questionnaire` | Compilador del lenguaje PYR | JavaCC + JTB | 5.400 |
+|  |  |  |  |
 
 Java 1.5, build con Ant, MySQL con 39 tablas, 29 tests JUnit 3 sobre 1.132 fuentes. Passwords en texto plano y credenciales embebidas en el código.
 
@@ -42,7 +43,7 @@ El objetivo es una plataforma CATI propia, operable íntegramente desde el naveg
 1. **Eliminar el costo de licencia por puesto.** El caso de negocio se cierra contra el gasto actual de 20 a 30 asientos.
 2. **Reportes correctos y auditables.** Todo indicador se deriva de hechos registrados, no de contadores mutables.
 3. **Cero instalación en el puesto.** El encuestador entra a una URL, con audio en el mismo navegador.
-4. **Modo de discado elegible por estudio** desde la administración: preview, power y predictivo.
+4. **Modo de discado elegible por estudio** desde la administración: manual, preview, power y predictivo.
 5. **Extensibilidad.** Agregar después nuevos tipos de participante — entre ellos agentes de IA — sin rehacer el núcleo.
 
 ### No-objetivos
@@ -78,22 +79,28 @@ Son cuatro roles, y el que manda en el diseño es el encuestador remoto: todo lo
 
 ### Escenario crítico: el traspaso de llamada al encuestador
 
-En preview el encuestador pide el caso y después se disca. En power y predictivo el orden se invierte: se disca primero y el caso se asigna cuando alguien atiende. Esa inversión es la exigencia más dura de todo el sistema.
+El modo de discado del estudio decide quién inicia la llamada. En manual la inicia el encuestador con el teclado; en preview pide el caso y el sistema disca; en power y predictivo el orden se invierte y el caso se asigna cuando alguien atiende. Esa inversión es la exigencia más dura de todo el sistema.
 
 ```mermaid
-flowchart LR
-  A[Pacer decide<br/>cuantas llamadas] --> B[Origina N llamadas]
-  B --> C{Atiende?}
+flowchart TD
+  M{Modo del<br/>estudio} -->|Manual| M1[Encuestador marca<br/>con el teclado]
+  M -->|Preview| P1[Pide caso,<br/>el sistema disca]
+  M -->|Power o predictivo| A[Pacer origina<br/>N llamadas]
+  M1 --> C{Atiende?}
+  P1 --> C
+  A --> C
   C -->|No o maquina| D[Clasifica y<br/>reagenda]
-  C -->|Humano| E{Agente<br/>disponible?}
-  E -->|Si| F[Asigna caso y<br/>puentea audio]
-  E -->|No| G[Abandonada:<br/>registra y penaliza]
-  F --> H[Pantalla lista<br/>en menos de 1s]
+  C -->|Humano| E{Caso ya<br/>asignado?}
+  E -->|Si| F[Conecta audio]
+  E -->|No| G{Agente<br/>disponible?}
+  G -->|Si| H[Asigna caso y<br/>puentea audio]
+  G -->|No| I[Abandonada:<br/>registra y penaliza]
+  H --> J[Pantalla lista<br/>en menos de 1s]
 ```
 
-El camino `F` tiene un presupuesto duro: desde que el respondente dice "hola" hasta que el encuestador ve la ficha del contacto y la primera pantalla del cuestionario debe pasar menos de un segundo. Si no se cumple, el encuestador improvisa y la entrevista arranca mal.
+El camino `H` tiene un presupuesto duro: desde que el respondente dice "hola" hasta que el encuestador ve la ficha del contacto y la primera pantalla del cuestionario debe pasar menos de un segundo. Si no se cumple, el encuestador improvisa y la entrevista arranca mal. En manual y preview ese presupuesto no existe, porque el caso ya estaba en pantalla antes de discar.
 
-El camino `G` es el que hay que minimizar, porque quema un caso de la muestra de forma irreversible.
+El camino `I` es el que hay que minimizar, porque quema un caso de la muestra de forma irreversible. Solo aparece en power y predictivo: en manual y preview nunca hay una llamada sin encuestador del otro lado.
 
 ### Consecuencias de que la sala sea 100% remota
 
@@ -103,7 +110,7 @@ El camino `G` es el que hay que minimizar, porque quema un caso de la muestra de
 
 ## Decisiones de arquitectura
 
-Siete decisiones tomadas en el análisis. Cada una vale hasta que aparezca evidencia que la contradiga; si cambia, se registra acá con su motivo.
+Nueve decisiones tomadas en el análisis. Cada una vale hasta que aparezca evidencia que la contradiga; si cambia, se registra acá con su motivo.
 
 ### ADR-001 — Postgres es la fuente de verdad; Firebase no
 
@@ -131,7 +138,17 @@ El `CallManagerImpl` del legacy son 956 líneas de máquina de estados que escuc
 
 El audio usa SIP sobre WebSocket con SRTP/DTLS, con **SIP.js** como librería. La interfaz es propia: el control de llamada va embebido en la pantalla del cuestionario.
 
-Se descarta montar un softphone completo tipo Browser-Phone. El encuestador no debe ver un teclado numérico al lado del cuestionario; si lo ve, se pierde la mitad de la ganancia de usabilidad.
+Se descarta montar un softphone empaquetado tipo Browser-Phone como interfaz única. Pero la interfaz propia **sí incluye teclado numérico y discado manual**, habilitado por configuración del estudio.
+
+Hay estudios que se levantan discando a mano — muestras chicas, contactos institucionales, re-contactos puntuales, seguimiento de casos especiales — y ahí el encuestador necesita marcar el número él mismo. El legacy ya contemplaba esto con su `CatiControlManualMode`, que forzaba la disposición de teléfono a atendida porque el sistema no veía el resultado del discado.
+
+La regla de diseño es entonces más fina que "nunca un teclado":
+
+- El teclado es un **panel que se muestra u oculta según el modo de discado del estudio**, no un softphone permanente al lado del cuestionario.
+- En modo manual el encuestador ve teclado, historial del caso y puede iniciar la llamada; en los modos automáticos el panel está oculto y el control se reduce a colgar, transferir y mudo.
+- En modo manual el sistema **sí ve la llamada**, a diferencia del legacy: el audio pasa por WebRTC y Asterisk, así que la disposición de teléfono se detecta igual que en los otros modos y no hay que forzarla.
+
+Ese último punto es una mejora concreta sobre el sistema viejo: el discado manual deja de ser un agujero en las estadísticas.
 
 **Codec:** se negocia G.711 (PCMA) extremo a extremo siempre que sea viable, para que Asterisk solo puentee y no transcodifique. Como toda la sala es remota, hay que medir si G.711 aguanta las conexiones domiciliarias reales; si no, se pasa a Opus y se asume el costo de CPU de transcodificación. **Esta decisión queda abierta hasta la prueba de campo.**
 
@@ -155,6 +172,61 @@ Esto es lo que permite agregar después un agente de IA sin tocar el núcleo: se
 
 El costo hoy es bajo: es una frontera de interfaces, no código de más.
 
+### ADR-008 — Toda llamada pertenece a un caso, y el caso declara su origen
+
+En modo manual el encuestador puede marcar un número que no está en la muestra. El sistema no admite llamadas huérfanas: antes de discar, ese número se clasifica en una de tres cosas.
+
+| Situación | Qué hace el sistema | Efecto en la tasa de respuesta |
+| --- | --- | --- |
+| Otro teléfono del mismo caso | Agrega el número al caso existente | Ninguno: la unidad muestral no cambia |
+| Persona nueva derivada | Crea un caso con `origen` y `caso_origen` | Queda fuera del denominador del marco |
+| Llamada administrativa | Registra tiempo, sin disposición de encuesta | Ninguno: no es un intento de contacto |
+
+**Por qué el caso derivado no entra al denominador.** Ese número no estaba en el marco y por lo tanto no tenía probabilidad conocida de selección. Si se mezcla con la muestra original, la tasa de respuesta queda mal calculada y las ponderaciones también. Se cuenta y se reporta aparte: si un estudio terminó con 12% de completas de origen derivado, eso tiene que estar a la vista del cliente y no disuelto en el total.
+
+**Campos nuevos.** `origen` en el caso, con valores `marco`, `derivado`, `reemplazo_manual` y `lista_externa`, más `caso_origen` apuntando al caso que lo generó cuando lo hay. Ese vínculo arma la cadena de referidos, que en estudios de poblaciones difíciles de alcanzar es dato valioso en sí mismo.
+
+**Captura en el momento.** El diálogo de tres opciones aparece antes de que la llamada arranque, no después. Es el único momento en que el encuestador sabe la respuesta; reconstruirlo después desde el CDR es imposible.
+
+**Habilitación por estudio.** Crear casos fuera de marco es una capacidad que se prende o apaga desde la administración. Una muestra probabilística estricta la tiene apagada y el sistema no ofrece esa opción; un estudio de población difícil de alcanzar la tiene prendida.
+
+**Pendiente para la Fase 0:** si un caso fuera de marco cuenta para cuotas. El argumento a favor es que la cuota se mide sobre la población lograda; el argumento en contra es que distorsiona el diseño muestral. Se decide con investigación, no por defecto.
+
+En costo esto no agrega nada: dos campos de esquema, un diálogo y un flag por estudio.
+
+### ADR-009 — Vista de compatibilidad CDR, con fecha de caducidad
+
+INVOKE 2 no genera un CDR como fuente de verdad: genera el log de eventos de ADR-002, que es estrictamente más rico. Asterisk emite su propio CDR y CEL, pero los reportes no se construyen sobre eso.
+
+Aun así el sistema expone una **vista de compatibilidad con forma de CDR**, derivada del log de eventos, que replica las columnas y convenciones que el tablero de productividad ya consume hoy desde `cdr_repo`: campaña como estudio, cuenta del encuestador, las dos disposiciones, los contadores de intentos por franja, el tipo de marcador.
+
+Sirve para dos cosas concretas:
+
+1. El tablero de productividad sigue funcionando el día uno, cambiando solo el origen de datos.
+2. Permite **comparar la operación vieja contra la nueva con la misma herramienta**, que es justamente lo que la línea base de la Fase 0 necesita para ser creíble.
+
+**Por qué lleva fecha de caducidad.** Las convenciones del CDR actual son soluciones de compromiso nacidas de limitaciones del sistema que lo emite: dos disposiciones empaquetadas en un mismo campo con un separador, los contadores de franja y el estrato metidos en un blob de parámetros, el tipo de marcador codificado dentro del identificador de llamada. Si INVOKE 2 replica eso para siempre, importa a un sistema nuevo los defectos del viejo.
+
+**Durante la convivencia, un solo tablero.** Los estudios que corran en INVOKE 2 se ven en el tablero actual, junto a los que sigan en el sistema viejo: el script lee de las dos fuentes y las unifica. El coordinador de campo no debería tener que mirar dos pantallas para saber cómo va la semana.
+
+**El destino es un tablero propio.** El tablero actual se descarta. INVOKE 2 tiene el suyo, construido sobre el log de eventos, con los indicadores que la forma CDR no puede expresar. La vista de compatibilidad y el tablero viejo **se retiran juntos**, el día que no quede ningún estudio corriendo en el sistema anterior. Ese es el criterio de retiro, y conviene que esté escrito para que nadie mantenga la vista por inercia.
+
+**Lo que la unificación exige.** El vocabulario de disposiciones de INVOKE 2 no va a ser idéntico al del sistema viejo: ADR-008 agrega los orígenes de caso y la Fase 0 agrega el código de llamada abandonada, que no tienen equivalente. La vista de compatibilidad necesita entonces una **tabla de equivalencias** del catálogo nuevo al vocabulario viejo, y los códigos sin equivalente tienen que aparecer como tales en el tablero, no mapeados a la fuerza a algo parecido.
+
+**Lo que el tablero va a poder mostrar recién con INVOKE 2**, y hoy no puede:
+
+- Tasa de abandono real, incluyendo falsos positivos de AMD
+- Casos fuera de marco y cadena de derivados (ADR-008)
+- Tiempo por pantalla del cuestionario
+- Calidad de red por puesto remoto
+- N vigente del pacer por estudio y franja horaria
+
+Eso es lo que justifica adaptar el tablero, más que apuntarlo a otra base.
+
+**Reparto de trabajo.** La vista de compatibilidad es parte de INVOKE 2. La adaptación del script y la plantilla del tablero se hace por separado, siguiendo la forma en que ese tablero se viene modificando.
+
+En costo no agrega nada: es una vista sobre datos que el sistema ya escribe.
+
 ## Fase 0 — Diccionario de disposiciones y fórmulas
 
 Esta fase no tiene código y es la que ataca la causa raíz del problema declarado. Produce un documento acordado entre sistemas e investigación que define cada código de disposición y cada fórmula de reporte. Todo lo que se construya después se valida contra él.
@@ -163,11 +235,12 @@ Los errores reportados hoy son bugs de código, no desacuerdos de definición. A
 
 ### Entregables
 
-1. **Catálogo de disposiciones de teléfono y de encuesta**, cada una con código, nombre, comportamiento (continúa, termina, termina y explica, termina y agenda), si es final o reintentable, y el tiempo de espera antes del próximo intento.
+1. **Catálogo de disposiciones de teléfono y de encuesta**, cada una con código, nombre, comportamiento (continúa, termina, termina y explica, termina y agenda), si es final o reintentable, el tiempo de espera antes del próximo intento, y su **equivalente en el vocabulario del sistema actual** — o la marca de que no tiene equivalente, segun ADR-009.
 2. **Nuevos códigos que el legacy no tenía**, entre ellos el de **llamada abandonada** — el respondente atendió y no había encuestador — que hoy no existe en el modelo y es imprescindible para operar power y predictivo.
 3. **Fórmulas de reporte escritas**, con numerador y denominador explícitos: tasa de respuesta, tasa de cooperación, tasa de contacto, tasa de rechazo, tasa de abandono.
 4. **Mapeo a las definiciones estándar de AAPOR**, para que los reportes a clientes sean defendibles metodológicamente y comparables con otros proveedores.
-5. **Línea base medida sobre la solución actual** de las métricas de la sección anterior.
+5. **Tratamiento de los casos fuera de marco** definidos en ADR-008: si cuentan para cuotas, cómo se declaran al cliente, y qué tipos de estudio habilitan su creación.
+6. **Línea base medida sobre la solución actual** de las métricas de la sección anterior.
 
 ### Punto de decisión que hay que resolver acá
 
@@ -181,7 +254,7 @@ Investigación y sistemas firman el documento, y existen los números de línea 
 
 ## Fase 1 — Núcleo operativo
 
-Objetivo: correr **un estudio real completo**, de punta a punta, con encuestadores remotos en el navegador y discado preview. Sin power, sin predictivo, sin supervisión en vivo.
+Objetivo: correr **un estudio real completo**, de punta a punta, con encuestadores remotos en el navegador, discado manual y preview, y la consola de supervisión funcionando. Sin power y sin predictivo.
 
 El estudio elegido debe ser chico, de un cliente real y con fecha de entrega. Es la función forzante que reemplaza al plazo externo que este proyecto no tiene.
 
@@ -190,7 +263,8 @@ El estudio elegido debe ser chico, de un cliente real y con fecha de entrega. Es
 | Componente | Qué incluye |
 | --- | --- |
 | Telefonía | Asterisk con ARI y WSS, trunk SIP existente, coturn, grabación con muestreo por estudio |
-| Puesto del encuestador | SIP.js embebido, control de llamada en la pantalla del cuestionario, prueba de audio previa al turno |
+| Puesto del encuestador | SIP.js embebido, control de llamada en la pantalla del cuestionario, panel de teclado para modo manual, prueba de audio previa al turno |
+| Supervisión en vivo | Consola con estado y caso en curso por encuestador, calidad de red del puesto, escucha de llamadas |
 | Motor de cuestionario | Ejecución del JSON: tipos de pregunta, validaciones, saltos, randomización, piping desde la ficha |
 | Editor de cuestionario | Editor gráfico web que produce y consume el JSON |
 | Muestra | Carga de phonebook con propiedades, asignación con bloqueo, reintentos por disposición, reagendamiento |
@@ -198,10 +272,13 @@ El estudio elegido debe ser chico, de un cliente real y con fecha de entrega. Es
 | Registro | Log de eventos inmutable segun ADR-002 |
 | Reportes | El subconjunto que el estudio piloto necesita, derivado del diccionario de Fase 0 |
 | Exportación | Datos de respuestas en formato utilizable por investigación |
+| Vista CDR | Vista de compatibilidad segun ADR-009, más la adaptación del tablero de productividad para leer de ahí |
 
 ### Fuera de alcance en esta fase
 
-Power y predictivo, consola de supervisión en vivo, escucha de llamadas, modo web autoadministrado, campañas de email, y la biblioteca completa de reportes del legacy.
+Power y predictivo, modo web autoadministrado, campañas de email, y la biblioteca completa de reportes del legacy.
+
+La consola de supervisión **no** queda fuera de alcance. Con sala 100% remota no hay otra forma de ver la operación, así que entra desde esta fase: sin ella el piloto se correría a ciegas, sin poder escuchar una llamada ni detectar un puesto con audio degradado. La calidad de red por encuestador es parte del entregable, no un agregado posterior.
 
 ### Riesgos propios de la fase
 
@@ -211,11 +288,11 @@ El segundo riesgo es de alcance: la tentación de portar los trece reportes del 
 
 ### Criterio de salida
 
-El estudio piloto se entregó al cliente, con sus datos exportados y sus reportes coincidiendo con lo que investigación espera.
+El estudio piloto se entregó al cliente, con sus datos exportados y sus reportes coincidiendo con lo que investigación espera, y el supervisor pudo escuchar llamadas y detectar al menos un problema de calidad desde la consola sin llamar por teléfono al encuestador.
 
-## Fase 2 — Power dialer y supervisión en vivo
+## Fase 2 — Power dialer
 
-Dos entregas que van juntas porque la segunda es el control de calidad de la primera: sin ver la sala en vivo no se puede operar un discador que sobre-disca.
+Esta fase invierte el orden del discado y agrega el sobre-discado parametrizable. La consola de supervisión ya viene de la Fase 1; acá se le suman los indicadores que el sobre-discado hace necesarios.
 
 ### Power dialer
 
@@ -223,11 +300,13 @@ Por cada encuestador que queda disponible se originan **N** llamadas. El adminis
 
 | Parámetro | Qué controla |
 | --- | --- |
-| Modo | Preview, power o predictivo |
+| Modo | Manual, preview, power o predictivo |
 | N inicial | Llamadas por encuestador disponible al arrancar |
 | N máximo | Techo duro, no superable por el ajuste automático |
 | Abandono objetivo | Umbral de tasa de abandono tolerada |
 | Ajuste automático | Si N se recalcula solo o queda fijo en el valor inicial |
+
+En modo manual los cuatro parámetros de sobre-discado no aplican: el encuestador marca con el teclado y el sistema solo registra.
 
 N no debería quedar fijo. El valor correcto se deriva de la **tasa de contacto observada del estudio en esa franja horaria**, que el log de eventos ya permite calcular. Ese cálculo es el mismo insumo que después usa el predictivo, por eso conviene construirlo en esta fase.
 
@@ -235,15 +314,23 @@ La inversión del orden descrita en la sección de escenarios — discar primero
 
 ### Consola de supervisión en vivo
 
-Con sala 100% remota esta consola no es un extra: es el único mecanismo de supervisión que existe. Debe mostrar por encuestador el estado actual, el caso en curso, el tiempo en ese estado, y la **calidad de red del puesto** — pérdida de paquetes, jitter, si la llamada va por TURN.
+La consola se construye en la Fase 1, no acá: con sala 100% remota es el único mecanismo de supervisión que existe, y el piloto no puede correr sin ella. Ya trae entonces estado por encuestador, caso en curso, tiempo en ese estado, escucha de llamadas y **calidad de red del puesto** — pérdida de paquetes, jitter, si la llamada va por TURN.
 
-La calidad de red por puesto es requisito y no adorno: el supervisor no puede acercarse a preguntar por qué se escucha mal.
+Lo que esta fase le agrega son los indicadores propios del sobre-discado: **tasa de abandono en ventana deslizante**, N vigente por estudio, y llamadas descartadas por falta de encuestador disponible.
 
-Incluye escucha de llamadas en curso y la capacidad de intervenir. La grabación con muestreo por estudio, ya presente desde la Fase 1, sostiene el control de calidad diferido.
+Sin esos indicadores el supervisor ve la sala pero no ve el discador, y no puede reaccionar a un estudio que está quemando muestra.
+
+La grabación con muestreo por estudio, presente desde la Fase 1, sostiene el control de calidad diferido y es el insumo de la calibración de AMD en la Fase 3.
+
+### Tablero propio de INVOKE 2
+
+Acá nace el tablero nativo sobre el log de eventos, porque los indicadores de esta fase — abandono en ventana deslizante, N vigente, llamadas descartadas — no se pueden expresar en forma de CDR.
+
+Convive con el tablero viejo unificado de la Fase 1 hasta que no quede ningún estudio en el sistema anterior. En ese momento se retiran juntos el tablero viejo y la vista de compatibilidad (ADR-009).
 
 ### Criterio de salida
 
-Un estudio corrió completo en modo power con la tasa de abandono por debajo del umbral configurado, y el supervisor pudo detectar y resolver al menos un problema de calidad desde la consola sin llamar por teléfono al encuestador.
+Un estudio corrió completo en modo power con la tasa de abandono por debajo del umbral configurado, y el supervisor pudo verla en vivo y bajar N desde la consola sin intervención técnica.
 
 ## Fase 3 — Discado predictivo
 
