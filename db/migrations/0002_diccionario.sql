@@ -111,7 +111,7 @@ VALUES
   (1, 21, 'Fallecido',                   20, true,  false, false, 'NE', 'cerrar',  false, true),
   (1, 22, 'No es un hogar',              20, true,  false, false, 'NE', 'cerrar',  false, true),
   -- 50: las fórmulas v1 no la asignan a un grupo. Provisoriamente NE; ver
-  -- docs/decisiones.html, decisión de implementación DI-07.
+  -- docs/decisiones.md, decisión de implementación DI-07.
   (1, 50, 'No aplica',                   21, true,  false, false, 'NE', 'cerrar',  false, true),
   -- Estados extendidos para operativos mixtos (se conservan los seis, decisión 9).
   (1, 13, 'Coordinada',                  20, true,  false, true,  NULL, 'cerrar',  false, false),

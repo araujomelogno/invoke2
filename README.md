@@ -5,9 +5,9 @@ modo de discado elegible por estudio (manual, preview, power y predictivo) y rep
 
 - **PRD**: [`specs/INVOKE 2.0 — PRD por fases y decisiones de arquitectura.md`](specs/)
 - **Fase 0** (definiciones que la implementación lee literalmente): [`docs/`](docs/)
-- **Manual de uso**: [`docs/manual.html`](docs/manual.html)
-- **Despliegue**: [`docs/despliegue.html`](docs/despliegue.html)
-- **Decisiones** (ADR del PRD + decisiones de implementación + pendientes): [`docs/decisiones.html`](docs/decisiones.html)
+- **Manual de uso**: [`docs/manual.md`](docs/manual.md)
+- **Despliegue**: [`docs/despliegue.md`](docs/despliegue.md)
+- **Decisiones** (ADR del PRD + decisiones de implementación + pendientes): [`docs/decisiones.md`](docs/decisiones.md)
 - **Reglas para quien desarrolla** (personas o Claude Code): [`CLAUDE.md`](CLAUDE.md)
 
 ## Arranque local

@@ -3,7 +3,7 @@
 CATI propio de Equipos Consultores. Antes de tocar nada, leé `specs/INVOKE 2.0 — PRD por fases y decisiones de arquitectura.md`
 y, para cualquier cosa que toque disposiciones o reportes, `docs/Diccionario de disposiciones — INVOKE 2.md` y
 `docs/Fórmulas de reporte y mapeo AAPOR — INVOKE 2.md`. Esos documentos se implementan **literalmente**.
-Las decisiones de implementación están en `docs/decisiones.html`.
+Las decisiones de implementación están en `docs/decisiones.md`.
 
 ## Reglas que no se discuten
 
