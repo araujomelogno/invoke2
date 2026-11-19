@@ -7,6 +7,7 @@ El contenido vive en docs/_plantilla/<nombre>.cuerpo.html; acá solo se envuelve
     python docs/_plantilla/construir.py
 """
 import base64
+import os
 import pathlib
 import re
 
@@ -73,4 +74,14 @@ for nombre, (tipo, titulo) in DOCS.items():
 </html>
 """
     (RAIZ / "docs" / f"{nombre}.html").write_text(html)
+    # Variante para publicar como página: sin envoltorio de documento (lo pone el
+    # visor) y sin enlaces relativos a los otros documentos.
+    destino = os.environ.get("INVOKE_DOCS_PUBLICAR")
+    if destino:
+        cuerpo_pag = html.split("<body>", 1)[1].rsplit("</body>", 1)[0].replace(f'<div class="pie">Otros documentos: {otros}</div>', "")
+        cabeza = html.split("<head>", 1)[1].split("</head>", 1)[0].replace('<meta charset="UTF-8" />', "").replace(
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0" />', "")
+        cabeza = cabeza.replace(f"<title>{titulo}</title>", f'<title>{titulo}</title>\n<meta name="claude:viewport-fit-sides" content="cover">')
+        pathlib.Path(destino).mkdir(parents=True, exist_ok=True)
+        (pathlib.Path(destino) / f"{nombre}.html").write_text(cabeza.strip() + "\n" + cuerpo_pag.strip() + "\n")
     print(f"docs/{nombre}.html ({len(secciones)} secciones)")
