@@ -1,0 +1,178 @@
+<div class="portada"><div class="acento"></div>
+  <h1>Registro de <em>decisiones</em> de INVOKE 2</h1>
+  <p>Las diez decisiones de arquitectura del PRD, las dos que agregó la implementación y las decisiones de detalle que el código toma. Para cada una: qué se decidió, dónde quedó en el código y cómo se verifica.</p>
+  <div class="meta"><span>Versión 1 · noviembre 2026</span><span>Fase 1 implementada · Fases 2 y 3 en lógica</span><span>Diccionario v1 · Fórmulas v1</span></div>
+</div>
+
+<section id="como-leer" data-indice="Cómo leer este registro" data-grupo="Introducción">
+<h2>Cómo leer este registro</h2>
+<p class="bajada">Una decisión vale hasta que aparezca evidencia que la contradiga; si cambia, se registra acá con su motivo (PRD).</p>
+<div class="grid">
+  <div class="tile"><div class="t">ADR</div><div class="v">Decisiones de arquitectura</div><p>Las 10 del PRD más ADR-011 y ADR-012, nacidas al implementar.</p></div>
+  <div class="tile"><div class="t">DI</div><div class="v">Decisiones de implementación</div><p>Detalles que los documentos no fijaban y el código tuvo que resolver. Las marcadas <span class="badge b-warn">provisoria</span> esperan a investigación.</p></div>
+  <div class="tile"><div class="t">P</div><div class="v">Pendientes</div><p>Lo que sigue abierto, quién lo resuelve y qué bloquea.</p></div>
+</div>
+<div class="nota info"><b>Fuente</b>Las definiciones de disposiciones y fórmulas no están acá: viven en el <code>Diccionario de disposiciones</code> y en <code>Fórmulas de reporte y mapeo AAPOR</code> (carpeta <code>docs/</code>), que la implementación lee literalmente.</div>
+{{arquitectura}}
+</section>
+
+<section id="adr-001" data-indice="ADR-001 · Postgres es la verdad" data-grupo="Decisiones del PRD">
+<h2>Decisiones de arquitectura del PRD</h2>
+<p class="bajada">Estado de cada ADR del PRD en el código.</p>
+<article class="adr"><header><div><span class="id">ADR-001</span><h3>Postgres es la fuente de verdad; Firebase no</h3></div><span class="badge b-ok">Implementada</span></header><div class="cuerpo"><dl>
+  <dt>Decisión</dt><dd>Muestra, cuotas, respuestas y reportes viven en Cloud SQL Postgres. Firebase autentica y, opcionalmente, pinta presencia.</dd>
+  <dt>Dónde</dt><dd><code>db/migrations/0003–0006</code>. Asignación con <code>SELECT … FOR UPDATE SKIP LOCKED</code> en <code>invoke.asignar_caso</code>, más un índice único parcial sobre <code>caso_estado.asignado_a</code> (un participante, un caso). Los roles salen de <code>invoke.usuario</code>, no de custom claims.</dd>
+  <dt>Excepción</dt><dd>El estado del encuestador vive en <code>invoke.participante_estado</code> (Postgres) y se espeja a Firestore <code>presencia/</code> solo si <code>INVOKE_ESPEJO_FIREBASE=1</code>.</dd>
+  <dt>Verificación</dt><dd><code>test_asignacion_concurrente_skip_locked</code>: dos conexiones reales compiten por un caso; una lo obtiene y la otra sigue sin esperar.</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-002" data-indice="ADR-002 · Log inmutable">
+<article class="adr"><header><div><span class="id">ADR-002</span><h3>Log de eventos inmutable, sin contadores mutables</h3></div><span class="badge b-ok">Implementada</span></header><div class="cuerpo"><dl>
+  <dt>Decisión</dt><dd>Toda transición es una fila de <code>invoke.evento</code> (32 tipos). Ningún reporte lee contadores.</dd>
+  <dt>Dónde</dt><dd><code>0004_eventos.sql</code>. Un trigger rechaza UPDATE, DELETE y TRUNCATE aunque el que lo intente sea el dueño, y la aplicación solo tiene INSERT y SELECT. Respuestas y calidad de red son tablas de hechos con la misma protección. No existen <code>surveyCount</code> ni <code>completedCount</code>: el avance de cuotas y el "estudio completo" son vistas sobre completas.</dd>
+  <dt>Matiz</dt><dd>Ver ADR-012: el asignador necesita una proyección operativa, que no es un contador de reporte.</dd>
+  <dt>Verificación</dt><dd><code>test_evento_inmutable</code>, <code>test_accesos</code> (el verificador prohíbe modificar hechos).</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-003" data-indice="ADR-003 · ARI, no AMI">
+<article class="adr"><header><div><span class="id">ADR-003</span><h3>Asterisk moderno con ARI, no AMI</h3></div><span class="badge b-ok">Implementada</span><span class="badge b-warn">Sin probar contra un PBX real</span></header><div class="cuerpo"><dl>
+  <dt>Decisión</dt><dd>Asterisk 20+ con <code>chan_pjsip</code>, WSS hacia el navegador, trunk existente hacia la PSTN, control por ARI.</dd>
+  <dt>Dónde</dt><dd><code>infra/asterisk/</code> (AMI deshabilitado en <code>modules.conf</code>). <code>services/ari/traductor.py</code> convierte eventos ARI en hechos. Cada llamada se origina con <code>channelId = llamada_id</code>: no hay correlación manual por <code>actionId</code>/<code>uniqueId</code>, que eran las 956 líneas del <code>CallManagerImpl</code> legacy.</dd>
+  <dt>Regla de acoplamiento</dt><dd>La aplicación nunca consulta a Asterisk el estado de una llamada. Al reiniciar, <code>services/ari</code> reconstruye qué canal es de qué puesto leyendo la base, no Asterisk.</dd>
+  <dt>Verificación</dt><dd><code>tests/test_ari.py</code> con un puerto doble (preview, no contesta, abandono, máquina, canal ajeno). Falta la prueba de integración con Asterisk: ver P-01.</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-004" data-indice="ADR-004 · SIP.js propio">
+<article class="adr"><header><div><span class="id">ADR-004</span><h3>SIP.js con interfaz propia; teclado según el modo</h3></div><span class="badge b-ok">Implementada</span><span class="badge b-warn">Codec abierto</span></header><div class="cuerpo"><dl>
+  <dt>Decisión</dt><dd>SIP.js embebido. El control de llamada está en la pantalla del cuestionario. El teclado es un panel que aparece solo en modo manual.</dd>
+  <dt>Dónde</dt><dd><code>web/js/telefono.js</code>; SIP.js 0.21.2 vendoreado como ESM en <code>web/vendor/sip.js</code>, sin build. En <code>web/js/estacion.js</code> el teclado se pinta solo si <code>modo_discado = 'manual'</code>. En manual el sistema sí ve la llamada: pasa por Asterisk y su disposición se registra igual que en los otros modos. Ya no se fuerza "Contesta", como hacía el <code>CatiControlManualMode</code> del legacy.</dd>
+  <dt>Codec</dt><dd>Se ofrece <code>alaw,ulaw,opus</code> al puesto y <code>alaw,ulaw</code> al trunk. Si la prueba de campo valida G.711, se saca opus del endpoint. <strong>Abierto hasta la prueba de una semana</strong> (P-02).</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-005" data-indice="ADR-005 · TURN propio">
+<article class="adr"><header><div><span class="id">ADR-005</span><h3>TURN propio desde el día uno</h3></div><span class="badge b-ok">Implementada</span></header><div class="cuerpo"><dl>
+  <dt>Dónde</dt><dd><code>infra/coturn/turnserver.conf</code> con <code>use-auth-secret</code> y cuotas para 30 sesiones. Solo puede retransmitir hacia el PBX: no es un proxy abierto. La API entrega credenciales efímeras (HMAC del secreto compartido) en <code>invoke/servicios/credenciales.py</code>.</dd>
+  <dt>Monitoreo</dt><dd>El puesto reporta en cada muestra de <code>getStats()</code> si el candidato elegido es <code>relay</code>. La consola lo muestra como "TURN" y la proporción por estudio se consulta sobre <code>invoke.calidad_red</code>.</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-006" data-indice="ADR-006 · Cuestionario JSON">
+<article class="adr"><header><div><span class="id">ADR-006</span><h3>Cuestionario como JSON con esquema, editado gráficamente</h3></div><span class="badge b-ok">Implementada</span></header><div class="cuerpo"><dl>
+  <dt>Dónde</dt><dd><code>schemas/cuestionario.schema.json</code> (JSON Schema 2020-12). Cubre el piso del DTD legacy: simple y múltiple (con "otro" y opción exclusiva), grilla, texto con patrón, número, código, fecha, hora, fórmula, validaciones por tipo y de pantalla, saltos por opción y por regla, fin con disposición, aleatorización de bloques, opciones y filas, y sustitución <code>{ficha.x}</code> / <code>{VAR}</code> / <code>{VAR.texto}</code>. Editor gráfico en <code>web/editor.html</code>, con vista previa que corre el motor real.</dd>
+  <dt>Versiones</dt><dd>Una versión publicada no se modifica (trigger). Cada respuesta guarda el cuestionario con el que se registró.</dd>
+  <dt>Sin PYR</dt><dd>No hay conversor (no-objetivo). Los códigos 1998 y −1, reservados en el legacy, el esquema los rechaza.</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-007" data-indice="ADR-007 · Participante">
+<article class="adr"><header><div><span class="id">ADR-007</span><h3>El participante de la llamada es una abstracción</h3></div><span class="badge b-ok">Implementada (frontera)</span></header><div class="cuerpo"><dl>
+  <dt>Dónde</dt><dd>Tabla <code>invoke.participante</code> con <code>tipo</code> (<code>encuestador_webrtc</code>, <code>agente_ia</code>). El asignador, el pacer y las proyecciones hablan de participante. El protocolo está en <code>invoke/dominio/participante.py</code>. El motor de cuestionario corre sin interfaz (<code>Motor.recorrer</code>): un agente de IA consumiría el mismo JSON.</dd>
+  <dt>Costo</dt><dd>Una frontera de interfaces; el agente de IA no se construye (Fase 4).</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-008" data-indice="ADR-008 · Origen del caso">
+<article class="adr"><header><div><span class="id">ADR-008</span><h3>Toda llamada pertenece a un caso, y el caso declara su origen</h3></div><span class="badge b-ok">Implementada</span></header><div class="cuerpo"><dl>
+  <dt>Dónde</dt><dd><code>invoke.caso.origen</code> (<code>marco</code>, <code>derivado</code>, <code>reemplazo_manual</code>, <code>lista_externa</code>), <code>caso_origen</code>, <code>usuario_creador</code> y <code>motivo</code>, con CHECKs que exigen los campos según el origen. <code>invoke.clasificar_numero</code> detecta el caso límite (el "derivado" ya estaba en la muestra). <code>invoke.crear_caso_fuera_de_marco</code> exige el flag del estudio y el tope de la guía, y hereda estrato y propiedades como valor inicial editable. El diálogo de tres opciones aparece antes de discar y no se puede saltear.</dd>
+  <dt>No hay huérfanas</dt><dd>Una disposición de teléfono sin caso se rechaza en la base, salvo en una llamada originada como administrativa, que no cuenta como intento.</dd>
+  <dt>Verificación</dt><dd><code>test_fuera_de_marco</code>, <code>test_tope_fuera_de_marco_por_guia</code>, <code>test_llamada_huerfana_rechazada</code>.</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-009" data-indice="ADR-009 · Vista CDR">
+<article class="adr"><header><div><span class="id">ADR-009</span><h3>Vista de compatibilidad CDR, con fecha de caducidad</h3></div><span class="badge b-ok">Implementada</span><span class="badge b-warn">Equivalencias pendientes</span></header><div class="cuerpo"><dl>
+  <dt>Dónde</dt><dd><code>invoke.cdr_compat</code> (<code>0008_cdr_compat.sql</code>) y <code>GET /api/cdr</code>. Tiene campaña, agente, las dos disposiciones en un campo separado por <code>|</code>, intentos por franja, estrato, tipo de marcador y la marca <code>es_estudio</code> (en lugar de la lista de nombres en el script). El rol <code>invoke_lectura</code> es para el script del tablero.</dd>
+  <dt>Sin equivalente</dt><dd>Los códigos 30, 31 y 32 salen como <code>SIN_EQUIVALENTE:&lt;código&gt;</code>, nunca forzados a otro valor. Mientras la columna de equivalencias del diccionario siga vacía, sale la etiqueta propia de INVOKE 2 (P-04).</dd>
+  <dt>Retiro</dt><dd>Escrito en la cabecera de la migración: la vista y el tablero viejo se retiran juntos el día que no quede ningún estudio en la solución anterior.</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-010" data-indice="ADR-010 · Stack de paneles">
+<article class="adr"><header><div><span class="id">ADR-010</span><h3>El stack es el de <code>paneles</code>, con una desviación acotada</h3></div><span class="badge b-ok">Implementada</span></header><div class="cuerpo"><dl>
+  <dt>Dónde</dt><dd>Python 3; Cloud Functions con único punto de entrada y ruteo propio (<code>functions/main.py</code> → <code>invoke/enrutador.py</code>); Cloud SQL con psycopg 3; migraciones SQL numeradas; Firebase Auth; HTML, CSS y JS plano sobre Hosting; pytest; región <code>southamerica-east1</code>. Tres procesos en Cloud Run (<code>services/ari</code>, <code>sala</code>, <code>pacer</code>), que son la única desviación.</dd>
+  <dt>Convenciones</dt><dd>Las invariantes viven en la base, hay un <code>CLAUDE.md</code> con reglas duras y <code>scripts/verificar_accesos.py</code> falla si una migración abre un acceso de más. Tipos del frontend con JSDoc y <code>tsc --checkJs</code> en CI, sin <code>dist/</code>.</dd>
+  <dt>Aviso</dt><dd>El repositorio <code>paneles</code> no estuvo accesible durante la implementación. El stack se siguió según su descripción en el PRD. Antes de producción conviene cotejar nombres de secretos, estructura de <code>functions/</code> y scripts de verificación (P-09).</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-011" data-indice="ADR-011 · Pata permanente" data-grupo="Decisiones nuevas">
+<h2>Decisiones de arquitectura nuevas</h2>
+<p class="bajada">Surgieron al implementar y tienen el mismo peso que las del PRD.</p>
+<article class="adr"><header><div><span class="id">ADR-011</span><h3>Una pata de audio permanente por puesto</h3></div><span class="badge b-orange">Nueva</span></header><div class="cuerpo"><dl>
+  <dt>Decisión</dt><dd>Al empezar el turno el navegador hace una sola llamada SIP a <code>sala-&lt;participante&gt;</code>, que entra a Stasis y queda en un puente mixto propio (<code>puesto-&lt;id&gt;</code>). Cada respondente se suma a ese puente desde ARI; colgar corta la pata del respondente, no la del puesto.</dd>
+  <dt>Por qué</dt><dd>El camino H del PRD tiene un presupuesto de menos de 1 s desde el "hola" hasta la pantalla lista. Con la pata permanente, el audio ya está negociado (ICE, DTLS, TURN) cuando alguien atiende: el traspaso es agregar un canal a un puente. La ficha viaja en el mismo aviso de la sala. Además, los cuatro modos de discado usan el mismo mecanismo: en manual el encuestador pide el número y ARI lo puentea.</dd>
+  <dt>Seguridad</dt><dd>El dialplan solo acepta <code>sala-N</code> si el endpoint autenticado es <code>pN</code>. La credencial SIP es efímera y en la base solo queda el hash md5.</dd>
+  <dt>Costo</dt><dd>Un canal por puesto conectado (30 en pico). Si el puesto pierde la red, la pata se cae y el navegador reconecta solo.</dd>
+</dl></div></article>
+</section>
+
+<section id="adr-012" data-indice="ADR-012 · Proyección operativa">
+<article class="adr"><header><div><span class="id">ADR-012</span><h3>Proyección operativa del caso, escrita solo por el trigger de eventos</h3></div><span class="badge b-orange">Nueva</span></header><div class="cuerpo"><dl>
+  <dt>Decisión</dt><dd><code>invoke.caso_estado</code> guarda lo que el asignador necesita leer rápido: estado, próximo intento, agenda, intentos por franja, sustituto activo y si hubo abandono. La escribe exclusivamente el trigger de <code>invoke.evento</code>, en la misma transacción, con <code>SECURITY DEFINER</code>; la aplicación no tiene privilegio de escritura sobre ella.</dd>
+  <dt>Por qué no contradice ADR-002</dt><dd>No es un contador de reporte: ningún reporte la lee (los reportes recalculan desde eventos, con instante de corte). Además es reconstruible: <code>invoke.reconstruir_caso_estado(caso)</code> la rehace reproduciendo los eventos, y un test verifica que coincide con la incremental.</dd>
+  <dt>Cierres por tope</dt><dd>Cuando la proyección cierra un caso por tope de intentos, de disposición o de franjas, emite el hecho <code>caso_cerrado</code>. Así el cierre también queda en el log (DI-02).</dd>
+</dl></div></article>
+</section>
+
+<section id="implementacion" data-indice="Decisiones de implementación" data-grupo="Detalle">
+<h2>Decisiones de implementación</h2>
+<p class="bajada">Lo que los documentos dejaron sin precisar y el código resolvió. Las provisorias se cambian por configuración o con una migración nueva, sin tocar lógica.</p>
+<div class="tabla"><table><thead><tr><th>#</th><th>Decisión</th><th>Dónde</th><th>Estado</th></tr></thead><tbody>
+<tr><td><b>DI-01</b></td><td>Los reportes se calculan con un <b>instante de corte</b> (<code>p_hasta</code>): el mismo pedido da el mismo número aunque el estudio siga corriendo. Por defecto, el reloj del momento.</td><td><code>invoke.clasificar_casos</code>, <code>conteo_tasas</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-02</b></td><td>El cierre por tope queda como evento <code>caso_cerrado</code>, para que el corte en el tiempo sepa cuándo un no-contacto pasó a definitivo.</td><td><code>invoke.cerrar_caso</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-03</b></td><td>Casos sin resolver: en un reporte <b>parcial</b> quedan "en proceso" (EP) y fuera de las tasas. En el de <b>cierre</b>: nunca llamado o sin contacto → UD; agendada sin cierre o contactado sin disposición → NC; con abandono → AB.</td><td><code>0007_reportes.sql</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-04</b></td><td>Un caso con un abandono (30) o un falso positivo de AMD (32) y sin disposición de encuesta posterior se clasifica AB.</td><td><code>clasificar_casos</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-05</b></td><td>Abandonada: espera de 24 h, en franja rotada, tope 2. Nunca vuelve al pacer: el asignador la ofrece en <b>preview</b> aunque el estudio esté en power o predictivo (regla del diccionario).</td><td><code>regla_reintento_defecto</code>, <code>asignar_caso</code></td><td><span class="badge b-warn">provisoria</span></td></tr>
+<tr><td><b>DI-06</b></td><td>Topes por defecto: 8 intentos por caso y 3 por franja; ninguna disposición tiene tope propio salvo la abandonada. Franjas por defecto de la línea base: mañana 09:00–16:30 y tarde 16:30–21:00 (hora de Montevideo).</td><td><code>invoke.estudio</code>, trigger de defectos</td><td><span class="badge b-warn">provisoria</span></td></tr>
+<tr><td><b>DI-07</b></td><td>La disposición 50 "No aplica" no está en los grupos del documento de fórmulas: provisoriamente es <b>NE</b>.</td><td><code>disposicion_encuesta</code></td><td><span class="badge b-warn">provisoria</span></td></tr>
+<tr><td><b>DI-08</b></td><td>Estados extendidos 13–18: sin símbolo de cálculo. Las finales se reportan aparte como "SC", y Recall, Retomar y Corregir (15, 16, 18) reabren el caso. Solo los aplica un supervisor.</td><td><code>disposicion_encuesta.efecto_caso</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-09</b></td><td>Cascada del asignador heredada del <code>FIFOScheduler</code>: agenda propia en ventana estrecha (±30 min) → agenda libre estrecha → agenda propia → agenda libre → pool común. El pool se ordena por prioridad de guía y luego por <b>orden aleatorio estable</b> asignado al cargar, en lugar del <code>rand()</code> por consulta del legacy. La agenda es una ventana única, no la ventana diaria repetida (ambigua en el legacy).</td><td><code>invoke.asignar_caso</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-10</b></td><td>Cuotas: tres tipos como el legacy (pregunta, área, propiedad de la ficha), con objetivo absoluto o % del objetivo del estudio. Las de área y propiedad filtran la asignación. Las de pregunta se evalúan <b>en cada pantalla</b>, no como foto al cargar el caso. Una completa que excede la cuota por concurrencia se acepta: no se descarta una entrevista hecha.</td><td><code>cuota_avance</code>, <code>evaluar_cuotas</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-11</b></td><td>Teléfonos normalizados al número nacional significativo uruguayo (sin 598 ni 0). Hace que la lista negra sea transversal de verdad: <code>099 123 456</code> y <code>+598 99 123 456</code> son el mismo número.</td><td><code>invoke.normalizar_telefono</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-12</b></td><td>Credenciales SIP efímeras: se rotan en cada inicio de sesión y en la base solo queda <code>md5(usuario:realm:clave)</code>, sin el texto plano que tenía el legacy. TURN con credenciales REST de 12 h.</td><td><code>credenciales.py</code>, <code>asterisk.ps_auths</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-13</b></td><td>El servidor no confía en el navegador: antes de aceptar una completa, recorre la entrevista entera con el motor Python. Si hay errores, o el flujo termina con otra disposición, la completa se rechaza.</td><td><code>estacion._validar_completa</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-14</b></td><td>Aleatorización reproducible: la semilla es el id del caso (FNV-1a + mulberry32, idénticos en Python y JS). Retomar una entrevista muestra el mismo orden.</td><td><code>cuestionario.py</code>, <code>motor.js</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-15</b></td><td>Comandos de telefonía por una cola en Postgres (<code>comando_telefonia</code>, LISTEN/NOTIFY + SKIP LOCKED) con un único consumidor ARI. La API y el pacer nunca hablan con Asterisk.</td><td><code>services/ari/main.py</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-16</b></td><td>La sala se alimenta de <code>pg_notify</code> del trigger de eventos. Hay como mucho una foto por segundo por estudio para la consola, y la ficha del caso viaja dentro del aviso de conexión.</td><td><code>services/sala/main.py</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-17</b></td><td>"Llamada descartada": el pacer corta llamadas que todavía timbran porque la sala se vació. No es intento ni abandono, y el caso vuelve tal cual.</td><td><code>services/pacer</code>, trigger</td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-18</b></td><td>Power: N = 1 / tasa de contacto observada en la franja (últimos 14 días, mínimo 30 intentos; si no, N inicial), acotado por N máximo. Predictivo: baja R 25 % si el abandono real supera el objetivo y sube 0,05 si hay ocio de más de 15 s. Actúa solo con 20 o más conexiones en la ventana, y registra como mucho un ajuste por minuto.</td><td><code>invoke/dominio/pacer.py</code></td><td><span class="badge b-warn">a calibrar</span></td></tr>
+<tr><td><b>DI-19</b></td><td>La tasa de contacto se implementó literal: Agendada y Fuera de Cuota entran como NC en el denominador pero no en el numerador, aunque hubo contacto. <b>A revisar con investigación</b>: probablemente deberían contarse como contacto.</td><td><code>formulas.tasas_marco</code></td><td><span class="badge b-warn">a revisar</span></td></tr>
+<tr><td><b>DI-20</b></td><td>Exportación: una variable 0/1 por opción en las múltiples y una por fila en las grillas. Cada registro lleva <code>origen</code> y <code>ponderable</code> (0 para fuera de marco), y el .sav lleva etiquetas de variable y de valor.</td><td><code>exportacion.py</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-21</b></td><td>El supervisor escucha con <code>snoop</code> de ARI sobre la pata del encuestador (oye a las dos partes). Con "susurrar" le habla solo al encuestador. Para escuchar, conecta su propia pata de audio desde la consola.</td><td><code>supervision.escuchar</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-22</b></td><td>La lista externa se carga como guía con <code>origen = lista_externa</code>: queda fuera del marco (decisión 8 del diccionario) y lleva quién la cargó.</td><td><code>muestra.cargar_guia</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+<tr><td><b>DI-23</b></td><td>Un estudio fija sus versiones de diccionario y fórmulas al activarse: un trigger impide cambiarlas después.</td><td><code>tg_estudio_versiones_fijas</code></td><td><span class="badge b-ok">tomada</span></td></tr>
+</tbody></table></div>
+</section>
+
+<section id="pendientes" data-indice="Pendientes" data-grupo="Abierto">
+<h2>Pendientes</h2>
+<p class="bajada">Lo que sigue abierto. Ninguno bloquea arrancar la prueba de audio; algunos sí bloquean el piloto.</p>
+<div class="tabla"><table><thead><tr><th>#</th><th>Pendiente</th><th>Quién</th><th>Bloquea</th></tr></thead><tbody>
+<tr><td><b>P-01</b></td><td>Integración real con Asterisk: originar, AMD, puentes, snoop y grabación se escribieron contra la API de ARI pero no se ejecutaron contra un PBX. Hay que armar el PBX de pruebas y recorrer los cuatro modos.</td><td>Sistemas</td><td><span class="badge b-err">Piloto</span></td></tr>
+<tr><td><b>P-02</b></td><td>Prueba de audio de una semana con 3 o 4 encuestadores: medir pérdida, jitter y proporción por TURN (ya se registran en <code>calidad_red</code>) y decidir el codec de ADR-004.</td><td>Sistemas + campo</td><td><span class="badge b-err">Piloto</span></td></tr>
+<tr><td><b>P-03</b></td><td>Valores por defecto de investigación: topes de intentos (DI-06), tratamiento de la abandonada (DI-05), clasificación de "No aplica" (DI-07) y tasa de contacto (DI-19).</td><td>Investigación</td><td><span class="badge b-warn">Reporte al cliente</span></td></tr>
+<tr><td><b>P-04</b></td><td>Columna de equivalencias con el CDR actual: se completa en <code>disposicion_*.equivalente_cdr</code> listando los valores distintos del CDR de estudios reales.</td><td>Sistemas</td><td><span class="badge b-warn">Tablero unificado</span></td></tr>
+<tr><td><b>P-05</b></td><td>Subida de grabaciones al bucket: Asterisk graba en disco local y el evento <code>grabacion</code> registra el archivo. Falta el job de Cloud Tasks que lo sube a <code>GRABACIONES_BUCKET</code> y sirve la escucha diferida desde la consola.</td><td>Sistemas</td><td><span class="badge b-warn">Calibración de AMD</span></td></tr>
+<tr><td><b>P-06</b></td><td>Mensaje de audio <code>invoke-disculpas</code> para llamadas abandonadas (texto y grabación).</td><td>Investigación</td><td><span class="badge b-warn">Fase 2</span></td></tr>
+<tr><td><b>P-07</b></td><td>Transferencia de llamada: el botón no existe y el comando responde "no soportado". Definir si el piloto la necesita.</td><td>Campo</td><td><span class="badge b-info">No</span></td></tr>
+<tr><td><b>P-08</b></td><td>Fecha de renovación y costo anual de la licencia actual (supuestos 1 y 2 del PRD): convierten el proyecto en un caso de negocio con fecha.</td><td>Dirección</td><td><span class="badge b-info">Presupuesto</span></td></tr>
+<tr><td><b>P-09</b></td><td>Cotejar con <code>paneles</code> las convenciones de despliegue (nombres de secretos, scripts de verificación) que no se pudieron leer.</td><td>Sistemas</td><td><span class="badge b-info">No</span></td></tr>
+<tr><td><b>P-10</b></td><td>Línea base defendible: más estudios, fin de semana y franja de tarde sobre la solución actual, antes de cortarla.</td><td>Campo</td><td><span class="badge b-err">Criterio de salida Fase 0</span></td></tr>
+</tbody></table></div>
+</section>
+
+<section id="trazabilidad" data-indice="Trazabilidad por fase">
+<h2>Trazabilidad por fase</h2>
+<p class="bajada">Qué se construyó de cada fase del PRD.</p>
+<div class="grid">
+  <div class="card"><h4>Fase 0</h4><p><span class="badge b-ok">Cargada</span> El diccionario v1 y las fórmulas v1 están en la base (<code>0002</code>), con un test por decisión del documento de fórmulas. Falta la línea base completa (P-10).</p></div>
+  <div class="card"><h4>Fase 1 · núcleo</h4><p><span class="badge b-ok">Construida</span> Telefonía ARI, puesto con SIP.js y prueba de audio, consola con calidad de red y escucha, motor y editor de cuestionario, muestra, cuotas, log de eventos, reportes del piloto, exportación .sav, CSV y Excel, y vista CDR.</p></div>
+  <div class="card"><h4>Fase 2 · power</h4><p><span class="badge b-ok">Lógica</span> Inversión del orden, reserva de casos, abandono, N desde la tasa de contacto, indicadores en la consola y control de N. Calibrar con datos reales.</p></div>
+  <div class="card"><h4>Fase 3 · predictivo</h4><p><span class="badge b-ok">Lógica</span> Lazo asimétrico sobre abandono real en ventana deslizante, caída a power con menos de 8 agentes, y revisión de AMD (31 → 32) con su tasa de error.</p></div>
+  <div class="card"><h4>Fase 4</h4><p><span class="badge b-info">Puerta abierta</span> La frontera de participante existe, el cuestionario corre sin interfaz y el asignador discrimina por tipo. No se construye nada más, por diseño.</p></div>
+</div>
+</section>

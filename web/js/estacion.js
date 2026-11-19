@@ -476,9 +476,24 @@ function mostrarPantalla(pid) {
   $('#atras').onclick = () => { const prev = S.historial.pop(); if (prev) mostrarPantalla(prev); };
   $('#siguiente').onclick = avanzar;
   $('#clasificar').onclick = () => clasificar();
-  $$('input[data-otro]').forEach((i) => { i.oninput = () => { S.respuestas[i.dataset.otro] = i.value; }; });
+  enlazarPreguntas();
   const primero = $('#preguntas input, #preguntas select, #preguntas textarea');
   primero?.focus();
+}
+
+/** Visibilidad en vivo: una respuesta puede mostrar u ocultar preguntas de la misma pantalla. */
+function enlazarPreguntas() {
+  $$('input[data-otro]').forEach((i) => { i.oninput = () => { S.respuestas[i.dataset.otro] = i.value; }; });
+  $('#preguntas').onchange = (/** @type {Event} */ e) => {
+    const ids = () => S.motor.preguntas(S.pantalla, S.respuestas).map((/** @type {any} */ q) => q.id).join();
+    const antes = ids();
+    leerPantalla();
+    if (antes === ids()) return;
+    const foco = /** @type {any} */ (e.target)?.name;
+    $('#preguntas').innerHTML = S.motor.preguntas(S.pantalla, S.respuestas).map((/** @type {any} */ q) => pregunta(q)).join('');
+    enlazarPreguntas();
+    if (foco) $(`[name="${CSS.escape(foco)}"]`)?.focus();
+  };
 }
 
 /** @param {any} q */
