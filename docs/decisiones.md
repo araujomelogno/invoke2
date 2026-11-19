@@ -1,6 +1,6 @@
 # Registro de decisiones — INVOKE 2
 
-Nov 19, 2026 · @Equipos
+Nov 19, 2026 · @Equipos · actualizado con el encargo de cierre de la Fase 1
 
 ## Cómo leer este registro
 
@@ -66,7 +66,7 @@ Postgres decide; Cloud Run reacciona. Ningún componente le pregunta a Asterisk 
 
 - **Decisión.** SIP.js embebido. El control de llamada va en la pantalla del cuestionario. El teclado es un panel que aparece solo en modo manual.
 - **Dónde.** `web/js/telefono.js`; SIP.js 0.21.2 vendoreado como ESM en `web/vendor/sip.js`, sin build. En manual el sistema sí ve la llamada: pasa por Asterisk y su disposición se registra como en los otros modos, sin forzar "Contesta" como el `CatiControlManualMode` legacy.
-- **Codec.** Se ofrece `alaw,ulaw,opus` al puesto y `alaw,ulaw` al trunk. Si la prueba de campo valida G.711, se saca opus del endpoint.
+- **Codec.** G.711 (`alaw,ulaw`) en todos los puestos y en el trunk: Asterisk solo puentea. Opus se habilita **por encuestador** (`invoke.participante.opus_habilitado`), y `credenciales.rotar_sip` escribe `ps_endpoints.allow` en cada inicio de sesión: `alaw,ulaw` por defecto, `opus,alaw,ulaw` para quien lo tenga. La consola muestra el códec que negoció cada puesto y cuántos están transcodificando. Hasta la migración 0009 el valor por defecto incluía Opus en todos los puestos (encargo de cierre, D1).
 
 ### ADR-005 — TURN propio desde el día uno
 
@@ -143,7 +143,7 @@ Lo que los documentos dejaron sin precisar y el código resolvió. Las provisori
 | DI-06 | Topes por defecto: 8 intentos por caso y 3 por franja; ninguna disposición tiene tope propio salvo la abandonada. Franjas por defecto de la línea base: mañana 09:00–16:30 y tarde 16:30–21:00 (hora de Montevideo). | `invoke.estudio`, trigger de defectos | Provisoria |
 | DI-07 | La disposición 50 "No aplica" no está en los grupos del documento de fórmulas: provisoriamente es **NE**. | `disposicion_encuesta` | Provisoria |
 | DI-08 | Estados extendidos 13–18: sin símbolo de cálculo. Las finales se reportan aparte como "SC", y Recall, Retomar y Corregir (15, 16, 18) reabren el caso. Solo los aplica un supervisor. | `disposicion_encuesta.efecto_caso` | Tomada |
-| DI-09 | Cascada del asignador heredada del `FIFOScheduler`: agenda propia en ventana estrecha (±30 min) → agenda libre estrecha → agenda propia → agenda libre → pool común. El pool se ordena por prioridad de guía y luego por **orden aleatorio estable** asignado al cargar, en lugar del `rand()` por consulta del legacy. La agenda es una ventana única, no la ventana diaria repetida (ambigua en el legacy). | `invoke.asignar_caso` | Tomada |
+| DI-09 | Cascada del asignador heredada del `FIFOScheduler`: agenda propia en ventana estrecha (±30 min) → agenda libre estrecha → agenda propia → agenda libre → pool común. En el pool, cada pedido sortea primero la población (frescos o reintentos, DI-24) y dentro de ella elige por prioridad de guía y **orden aleatorio reproducible** (DI-25), en lugar del `rand()` por consulta del legacy. La agenda es una ventana única, no la ventana diaria repetida (ambigua en el legacy). | `invoke.asignar_caso`, `invoke.pedir_al_pool` | Tomada |
 | DI-10 | Cuotas: tres tipos como el legacy (pregunta, área, propiedad de la ficha), con objetivo absoluto o % del objetivo del estudio. Las de área y propiedad filtran la asignación. Las de pregunta se evalúan **en cada pantalla**, no como foto al cargar el caso. Una completa que excede la cuota por concurrencia se acepta: no se descarta una entrevista hecha. | `cuota_avance`, `evaluar_cuotas` | Tomada |
 | DI-11 | Teléfonos normalizados al número nacional significativo uruguayo (sin 598 ni 0). Hace que la lista negra sea transversal de verdad: `099 123 456` y `+598 99 123 456` son el mismo número. | `invoke.normalizar_telefono` | Tomada |
 | DI-12 | Credenciales SIP efímeras: se rotan en cada inicio de sesión y en la base solo queda `md5(usuario:realm:clave)`, sin el texto plano que tenía el legacy. TURN con credenciales REST de 12 h. | `credenciales.py`, `asterisk.ps_auths` | Tomada |
@@ -158,6 +158,13 @@ Lo que los documentos dejaron sin precisar y el código resolvió. Las provisori
 | DI-21 | El supervisor escucha con `snoop` de ARI sobre la pata del encuestador (oye a las dos partes). Con "susurrar" le habla solo al encuestador. Para escuchar, conecta su propia pata de audio desde la consola. | `supervision.escuchar` | Tomada |
 | DI-22 | La lista externa se carga como guía con `origen = lista_externa`: queda fuera del marco (decisión 8 del diccionario) y lleva quién la cargó. | `muestra.cargar_guia` | Tomada |
 | DI-23 | Un estudio fija sus versiones de diccionario y fórmulas al activarse: un trigger impide cambiarlas después. | `tg_estudio_versiones_fijas` | Tomada |
+| DI-24 | **Mezcla de frescos y reintentos** (encargo H1). `estudio.proporcion_frescos` (0,5 por defecto) es la probabilidad de sortear la población de casos nunca intentados en **cada pedido** al pool, del asignador y del pacer; no es un cupo acumulado. Fresco = `caso_estado.intentos = 0`, que el trigger deriva del log. Si la población sorteada está vacía se usa la otra: nadie espera porque "su mitad" se agotó. Cada entrega registra la población en el evento (`poblacion`, `sorteo`) y la consola muestra el reparto efectivo del día junto al configurado. | `invoke.pedir_al_pool`, `invoke.reparto_frescos` | Tomada |
+| DI-25 | **Orden aleatorio reproducible** (encargo H3). Cada guía tiene una `semilla` fijada al cargarla y registrada en `muestra_cargada`; el orden de cada caso es `orden_determinista(semilla, número de línea)`, un hash MD5 (los casos creados desde el puesto usan su id). La misma guía con la misma semilla da el mismo orden. El orden no se modifica después (trigger). El pool lee el índice `caso_pool_idx (estudio_id, guia_id, orden_aleatorio)` guía por guía: el plan es `Index Scan using caso_pool_idx` + `LockRows`, sin `Sort` (verificado con `EXPLAIN` sobre 20.000 casos, `test_el_pool_lee_el_indice`). | `0010_orden_y_frescos.sql` | Tomada |
+| DI-26 | **Se graban todas las llamadas de encuesta conectadas** (encargo H2); reemplaza al muestreo por estudio. `llamada_originada.grabar` es siempre verdadero para encuesta y falso para administrativas; `estudio.muestreo_grabacion` queda sin uso. `services/ari` baja cada grabación por ARI, la sube al bucket (`<estudio>/<AAAA>/<MM>/<DD>/<llamada>.wav`) con verificación de MD5, registra `grabacion_subida` y recién entonces la borra del PBX. Si el proceso se reinicia retoma desde `invoke.grabacion_pendiente`. La consola escucha con una URL firmada de 15 minutos. Las completas de origen fuera de marco ya no "entran con prioridad al muestreo": quedan marcadas para **revisión prioritaria** de su grabación. | `services/ari/grabaciones.py`, `invoke/servicios/grabaciones.py` | Tomada |
+| DI-27 | El traductor de ARI deriva el estado de una llamada que termina (atendida, conectada, AMD, abandono) de `invoke.llamada`, no de la memoria: un reinicio con llamadas en curso ya no escribe un no-contacto sobre una llamada conversada (encargo D2). La llamada se registra al originarla, así el estado «timbrando» llega a la sala (D3). | `services/ari/traductor.py` | Tomada |
+| DI-28 | Las rutas del puesto que leen respuestas, inician la encuesta, evalúan cuotas o clasifican exigen que el caso sea del encuestador, o que la llamada clasificada sea suya (encargo D4). | `estacion._exigir_caso_propio` | Tomada |
+| DI-29 | Los reportes (clasificación de casos, productividad, abandono, contacto observado) leen el diccionario de la versión del estudio: `estado`, `simbolo` y `efecto_caso`, sin códigos literales (encargo D5). Quedan dos literales con su test: `UD` para el caso nunca resuelto al cierre (definición del documento de fórmulas) y 31 en el conteo de contestadores detectados, porque el catálogo no tiene un atributo que lo distinga del 9. Siguen con literales, también testeados, dos invariantes de la base: "solo 4 habilita encuesta" y la marca de abandonada previa (30). | `0011_reportes_leen_diccionario.sql` | Tomada |
+| DI-30 | Robustez: las expresiones del cuestionario tienen un límite de profundidad (64) además del de nodos, gemelo en Python y JS, y una definición anidada de más da 422 con mensaje (M1). La API convierte toda excepción en una respuesta JSON (500, o 503 si el pool de conexiones se agotó) (M2). El pool tiene tamaño y espera explícitos (`INVOKE_DB_POOL`, `INVOKE_DB_ESPERA_S`) y la concurrencia de Functions coincide con él (M3). La sala recalcula solo la foto de los estudios que cambiaron (M4). | `expresiones.py`/`.js`, `api.py`, `db.py`, `services/sala` | Tomada |
 
 ## Pendientes
 
@@ -169,12 +176,32 @@ Ninguno bloquea arrancar la prueba de audio; algunos sí bloquean el piloto.
 | P-02 | Prueba de audio de una semana con 3 o 4 encuestadores: medir pérdida, jitter y proporción por TURN (ya se registran en `calidad_red`) y decidir el codec de ADR-004. | Sistemas y campo | Piloto |
 | P-03 | Valores por defecto de investigación: topes de intentos (DI-06), tratamiento de la abandonada (DI-05), clasificación de "No aplica" (DI-07) y tasa de contacto (DI-19). | Investigación | Reporte al cliente |
 | P-04 | Columna de equivalencias con el CDR actual: se completa en `disposicion_*.equivalente_cdr` listando los valores distintos del CDR de estudios reales. | Sistemas | Tablero unificado |
-| P-05 | Subida de grabaciones al bucket: Asterisk graba en disco local y el evento `grabacion` registra el archivo. Falta el job de Cloud Tasks que lo sube a `GRABACIONES_BUCKET` y sirve la escucha diferida desde la consola. | Sistemas | Calibración de AMD |
+| P-05 | ~~Subida de grabaciones al bucket.~~ **Cerrado** por el encargo de cierre (H2, DI-26). Queda abierta la retención: ver P-11. | — | — |
 | P-06 | Mensaje de audio `invoke-disculpas` para llamadas abandonadas (texto y grabación). | Investigación | Fase 2 |
 | P-07 | Transferencia de llamada: el botón no existe y el comando responde "no soportado". Definir si el piloto la necesita. | Campo | — |
 | P-08 | Fecha de renovación y costo anual de la licencia actual (supuestos 1 y 2 del PRD): convierten el proyecto en un caso de negocio con fecha. | Dirección | Presupuesto |
 | P-09 | Cotejar con `paneles` las convenciones de despliegue (nombres de secretos, scripts de verificación) que no se pudieron leer. | Sistemas | — |
 | P-10 | Línea base defendible: más estudios, fin de semana y franja de tarde sobre la solución actual, antes de cortarla. | Campo | Criterio de salida de Fase 0 |
+| P-11 | Plazo de retención de las grabaciones. Con todas las llamadas grabadas son del orden de 25 GB por mes de operativo a sala llena, acumulativos. Se aplica como regla de ciclo de vida del bucket (`docs/despliegue.md`, paso 6). | Equipos | Cierre de H2 en producción |
+| P-12 | Qué encuestadores arrancan con Opus habilitado, si alguno. El valor por defecto es ninguno hasta que la prueba de audio (P-02) diga lo contrario. | Campo | — |
+| P-13 | Confirmar cómo se declara al cliente un «No volver a llamar»: el diccionario lo clasifica como elegibilidad desconocida (UD) y no como rechazo; con `e = 1` la tasa de respuesta no cambia, pero la de rechazo sí. Está implementado según el documento de fórmulas. | Investigación | Primer informe con tasas |
+| P-14 | La política de casos fuera de marco (control 3) todavía dice que las completas derivadas "entran con prioridad al muestreo de grabación". Con H2 ya no hay muestreo: conviene actualizar el texto a "revisión prioritaria de su grabación", que es lo que hace el sistema. | Investigación | — |
+
+## Encargo de cierre de la Fase 1
+
+Estado de los puntos de `specs/INVOKE 2 — Encargo de cierre de la Fase 1.md`.
+
+| # | Punto | Estado | Dónde | Verificación |
+| --- | --- | --- | --- | --- |
+| D1 + H4 | Opus activado en todos los puestos; códec por encuestador | Cerrado en código. Falta verificarlo en el PBX de pruebas (P-01) | `0009`, `credenciales.rotar_sip`, administración de usuarios, consola | `test_codec_g711_por_defecto_y_opus_por_puesto`; prueba en PBX pendiente |
+| D2 | El traductor de ARI perdía el estado al reiniciar | Cerrado | `services/ari/traductor.py`, `PuertoReal.estado_llamada` | `test_reinicio_con_llamada_conectada_no_inventa_un_no_contacto`, `test_estado_llamada_desde_la_base` |
+| D3 | `llamada_timbrando` no se emitía | Cerrado | `Traductor.registrar_originada` | `test_timbre_se_emite`, `test_timbre_despues_de_reiniciar_y_canales_ajenos` |
+| H2 | Grabar todas las llamadas y subirlas al bucket | Cerrado; falta definir la retención (P-11) | `0009`, `0010`, `services/ari/grabaciones.py` | `tests/test_grabaciones.py` |
+| H3 | Orden aleatorio reproducible e indexado | Cerrado | `0010`, `muestra.cargar_guia` | `test_semilla_reproduce_el_orden`, `test_el_pool_lee_el_indice` |
+| H1 | Mezcla de frescos y reintentos | Cerrado | `0010`, consola | `test_mezcla_de_frescos_sorteada_en_cada_pedido` (1.000 pedidos, ±3 puntos), `test_si_la_poblacion_sorteada_esta_vacia_se_usa_la_otra`, `test_pacer_mezcla_y_graba` |
+| D4 | Tres rutas del puesto sin control de propiedad | Cerrado (y una cuarta: evaluar cuotas) | `estacion._exigir_caso_propio` | `test_el_puesto_no_toca_casos_ajenos` |
+| D5 | Los reportes no leían el diccionario | Cerrado | `0011` | `test_los_reportes_leen_el_diccionario_del_estudio`, `test_literales_que_quedan` |
+| M1–M5 | Menores | Cerrados | ver DI-30; `.DS_Store` fuera del repositorio | `test_definicion_anidada_de_mas_da_error_y_no_revienta`, casos de profundidad en la batería compartida, `test_errores_inesperados_y_pool_agotado_son_respuestas`, `test_sala_solo_recalcula_los_estudios_que_cambiaron` |
 
 ## Trazabilidad por fase
 

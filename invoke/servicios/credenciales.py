@@ -30,11 +30,25 @@ def rotar_sip(cur, participante_id: int, nombre: str) -> dict:
     cur.execute("""INSERT INTO asterisk.ps_auths (id, username, realm, md5_cred) VALUES (%s, %s, %s, %s)
                    ON CONFLICT (id) DO UPDATE SET md5_cred = EXCLUDED.md5_cred, realm = EXCLUDED.realm""",
                 (ep, ep, realm, md5))
-    cur.execute("""INSERT INTO asterisk.ps_endpoints (id, aors, auth, callerid) VALUES (%s, %s, %s, %s)
-                   ON CONFLICT (id) DO UPDATE SET callerid = EXCLUDED.callerid""",
-                (ep, ep, ep, f'"{nombre}" <{ep}>'))
+    allow = codecs_de(cur, participante_id)
+    cur.execute("""INSERT INTO asterisk.ps_endpoints (id, aors, auth, callerid, allow) VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (id) DO UPDATE SET callerid = EXCLUDED.callerid, allow = EXCLUDED.allow""",
+                (ep, ep, ep, f'"{nombre}" <{ep}>', allow))
     return {"uri": f"sip:{ep}@{cfg.sip_dominio}", "usuario": ep, "clave": clave, "wss": cfg.sip_wss,
-            "realm": realm, "destino_sala": f"sip:sala-{participante_id}@{cfg.sip_dominio}"}
+            "realm": realm, "destino_sala": f"sip:sala-{participante_id}@{cfg.sip_dominio}", "codecs": allow}
+
+
+# ADR-004 y encargo de cierre (D1, H4): G.711 extremo a extremo por defecto, para que
+# Asterisk solo puentee. Opus solo en los puestos que lo tengan habilitado.
+CODECS_G711 = "alaw,ulaw"
+CODECS_CON_OPUS = "opus,alaw,ulaw"
+
+
+def codecs_de(cur, participante_id: int) -> str:
+    cur.execute("SELECT opus_habilitado FROM invoke.participante WHERE id = %s", (participante_id,))
+    fila = cur.fetchone()
+    opus = bool(fila and (fila["opus_habilitado"] if isinstance(fila, dict) else fila[0]))
+    return CODECS_CON_OPUS if opus else CODECS_G711
 
 
 def ice(usuario_uid: str, vigencia_s: int = 12 * 3600, ahora: float | None = None) -> list[dict]:

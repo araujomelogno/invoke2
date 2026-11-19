@@ -6,10 +6,28 @@ from services.ari.traductor import Traductor
 
 
 class Doble:
-    def __init__(self, llamadas, disponible=None):
+    """Puerto doble. `base` simula lo que ya está persistido en Postgres (para el reinicio)."""
+
+    def __init__(self, llamadas, disponible=None, base=None):
         self.llamadas = llamadas
         self.disponible = disponible
+        self.base = base or {}
         self.eventos, self.acciones, self.dispuestas = [], [], set()
+
+    def estado_llamada(self, i):
+        e = dict(self.base.get(i, {}))
+        for tipo, c in self.eventos:
+            if c.get("llamada_id") != i:
+                continue
+            if tipo == "llamada_atendida":
+                e["atendida"] = True
+            elif tipo == "llamada_conectada":
+                e["conectada"], e["participante_id"] = True, c.get("participante_id")
+            elif tipo == "amd_resultado":
+                e["amd"] = c["datos"]["resultado"]
+            elif tipo == "llamada_abandonada":
+                e["abandonada"] = True
+        return e
 
     def evento(self, tipo, **c):
         self.eventos.append((tipo, c))
@@ -20,6 +38,9 @@ class Doble:
         return self.llamadas.get(i)
 
     def tomar_participante(self, i):
+        # Como invoke.tomar_participante_para: si hay alguien, registra la conexión.
+        if self.disponible is not None:
+            self.eventos.append(("llamada_conectada", {"llamada_id": i, "participante_id": self.disponible}))
         return self.disponible
 
     def canal_de(self, p):
@@ -92,6 +113,61 @@ def test_canal_ajeno_se_corta():
     d = Doble({})
     Traductor(d).manejar({"type": "StasisStart", "args": ["cliente", "X"], "channel": {"id": "X"}})
     assert d.acciones == [("colgar", "X")] and d.eventos == []
+
+
+def test_reinicio_con_llamada_conectada_no_inventa_un_no_contacto():
+    """Encargo D2: el proceso reinicia con la llamada conectada; al cortar, la memoria
+    está vacía pero la base sabe que fue atendida y conectada. No hay disposición automática."""
+    d = Doble({"L9": {"caso_id": 5, "participante_id": None, "tipo": "encuesta"}},
+              base={"L9": {"atendida": True, "conectada": True, "participante_id": 7, "amd": "HUMAN"}})
+    t = Traductor(d)                      # recién arrancado: self.llamadas vacío
+    t.manejar({"type": "ChannelDestroyed", "channel": {"id": "L9"}, "cause": 16})
+    assert tipos(d) == ["llamada_finalizada"]
+    assert d.eventos[0][1]["participante_id"] == 7     # el encuestador pasa a clasificar
+    assert "disposicion_telefono" not in tipos(d)
+
+
+def test_reinicio_con_llamada_atendida_por_maquina():
+    d = Doble({"L10": {"caso_id": 5, "participante_id": None, "tipo": "encuesta"}},
+              base={"L10": {"atendida": True, "amd": "MACHINE"}})
+    Traductor(d).manejar({"type": "ChannelDestroyed", "channel": {"id": "L10"}, "cause": 16})
+    assert d.eventos[-1][1]["datos"]["codigo"] == 31
+
+
+def test_timbre_se_emite():
+    """Encargo D3: Ringing llega antes de StasisStart; la llamada se registra al originar."""
+    d = Doble({"L11": {"caso_id": 5, "participante_id": 7, "tipo": "encuesta"}})
+    t = Traductor(d)
+    t.registrar_originada("L11")
+    t.manejar({"type": "ChannelStateChange", "channel": {"id": "L11", "state": "Ringing"}})
+    assert tipos(d) == ["llamada_timbrando"]
+
+
+def test_timbre_despues_de_reiniciar_y_canales_ajenos():
+    d = Doble({"L12": {"caso_id": 5, "participante_id": 7, "tipo": "encuesta"}})
+    t = Traductor(d)                      # sin registrar_originada: reinició entre originar y timbrar
+    t.manejar({"type": "ChannelStateChange", "channel": {"id": "L12", "state": "Ringing"}})
+    t.manejar({"type": "ChannelStateChange", "channel": {"id": "X", "state": "Ringing"}})
+    t.manejar({"type": "ChannelStateChange", "channel": {"id": "L12", "state": "Up"}})
+    assert tipos(d) == ["llamada_timbrando"]
+
+
+@pytest.mark.usefixtures("dsn_base")
+def test_estado_llamada_desde_la_base(cur, esc):
+    """La consulta real del puerto (services/ari/main.py) contra Postgres."""
+    from services.ari.main import PuertoReal
+
+    e = esc.estudio(modo_discado="power")
+    a = esc.usuario()
+    esc.sesion(a, e)
+    c = esc.caso(e)
+    ll = db.todos(cur, "SELECT * FROM invoke.reservar_casos_pacer(%s, 1)", (e["id"],))[0]["llamada_id"]
+    db.evento(cur, "llamada_atendida", caso_id=c["id"], llamada_id=ll)
+    db.evento(cur, "amd_resultado", caso_id=c["id"], llamada_id=ll, datos={"resultado": "HUMAN"})
+    cur.execute("SELECT invoke.tomar_participante_para(%s)", (ll,))
+    est = PuertoReal(None).estado_llamada(str(ll))
+    assert est["atendida"] and est["conectada"] and est["participante_id"] == a.participante_id
+    assert est["amd"] == "HUMAN" and not est["abandonada"]
 
 
 @pytest.mark.usefixtures("dsn_base")

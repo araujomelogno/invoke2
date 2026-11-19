@@ -17,6 +17,8 @@ Todos entran a la misma dirección con su correo y contraseña. Cada uno llega d
 
 Una persona puede tener varios roles. En ese caso, la barra lateral muestra accesos a las demás pantallas (Admin, Sala, Editor, Puesto).
 
+**Opus por encuestador.** En **Administración → Usuarios** se puede marcar «Habilitar Opus en su puesto». Por defecto ningún puesto lo tiene: hablan G.711 y el servidor solo puentea el audio. Opus es para una conexión doméstica que lo justifique, porque obliga al servidor a transcodificar. Toma efecto en el próximo inicio de turno.
+
 **Olvidé la contraseña.** Escribí tu correo en el ingreso y tocá «Olvidé mi contraseña»: llega un enlace para crear una nueva. Si tu cuenta existe pero no está habilitada en INVOKE 2, pedí el alta a la coordinación.
 
 ## Encuestador
@@ -131,7 +133,7 @@ Con la sala 100% remota, esta consola es el único mecanismo de control. Se actu
 | Ámbar | Clasificando: la llamada terminó y falta la disposición |
 | Gris | En pausa |
 
-**Calidad de red del puesto.** Cada tarjeta muestra la pérdida de paquetes y el jitter de los últimos segundos, si la llamada va por TURN (relay) y el codec. Con **más de 3 % de pérdida o más de 30 ms de jitter** la tarjeta se marca en rojo: ese encuestador probablemente se oye entrecortado. «Sin audio» quiere decir que el puesto no tiene la conexión de audio levantada.
+**Calidad de red del puesto.** Cada tarjeta muestra la pérdida de paquetes y el jitter de los últimos segundos, si la llamada va por TURN (relay) y el códec. Lo normal es G.711 (PCMA o PCMU): Asterisk solo puentea. Si un puesto habla Opus, la tarjeta dice «transcodifica» y arriba se cuenta cuántos están así: cada uno le suma trabajo al servidor. Con **más de 3 % de pérdida o más de 30 ms de jitter** la tarjeta se marca en rojo: ese encuestador probablemente se oye entrecortado. «Sin audio» quiere decir que el puesto no tiene la conexión de audio levantada.
 
 **Escuchar y susurrar.**
 
@@ -139,6 +141,8 @@ Con la sala 100% remota, esta consola es el único mecanismo de control. Se actu
 2. En una tarjeta en llamada, **Escuchar** te deja oír a las dos partes sin que nadie lo note.
 3. **Susurrar** te deja hablarle solo al encuestador; el respondente no te oye.
 4. **Dejar** corta la escucha.
+
+**Reparto de frescos y reintentos.** Arriba de los puestos se ve cuántos casos del pool se entregaron hoy, cuántos fueron frescos (nunca llamados) y cuántos reintentos, junto a la proporción configurada en el estudio. Se sortea en cada pedido, así que el efectivo puede diferir del configurado; si se aleja mucho, una de las dos poblaciones se está agotando.
 
 ### Discador en power y predictivo
 
@@ -155,9 +159,11 @@ En los estudios con sobre-discado, arriba de los puestos aparecen los indicadore
 
 **Promover una parcial.** En **Parciales** están las entrevistas interrumpidas. Una parcial nunca cuenta sola como completa: solo vos podés promoverla, con un motivo, y queda registrado quién lo hizo y cuándo.
 
-**Revisión del detector de contestador (AMD).** El detector a veces confunde a una persona con un contestador y le corta la llamada: es un abandono que no se ve. En **Revisión de AMD** se listan llamadas grabadas que el detector marcó como máquina. Escuchalas: si era una persona, tocá **Era una persona**. La tasa de error se recalcula y entra en el abandono real. Conviene hacerlo todas las semanas, no una sola vez.
+**Revisión del detector de contestador (AMD).** El detector a veces confunde a una persona con un contestador y le corta la llamada: es un abandono que no se ve. En **Revisión de AMD** se listan llamadas grabadas que el detector marcó como máquina. Tocá **Escuchar** (la grabación se abre en la consola) y, si era una persona, tocá **Era una persona**. La tasa de error se recalcula y entra en el abandono real. Conviene hacerlo todas las semanas, no una sola vez.
 
 **Casos fuera de marco por encuestador.** Muestra cuántos casos derivados creó cada encuestador y cuántos terminaron en completa, y marca a quien se desvía mucho del resto de la sala. No implica mala fe: es el control normal sobre un procedimiento que crea casos.
+
+**Revisión prioritaria de grabaciones.** En la misma pantalla están las completas de origen fuera de marco, con su grabación: se escuchan antes que el resto.
 
 ## Administrador
 
@@ -192,7 +198,9 @@ La **alerta de composición derivada** (por estrato) es del estudio. El **tope d
 | Ajuste automático | Si N se recalcula con la tasa de contacto de la franja o queda fijo |
 | Ventana | Minutos de la ventana deslizante del abandono (30 a 60) |
 | Mínimo de agentes para predictivo | Con menos encuestadores disponibles que este número, el predictivo trabaja como power |
-| Muestreo de grabación | Proporción de llamadas que se graban (0,10 = una de cada diez) |
+| Proporción de casos frescos | Probabilidad de que cada pedido de caso salga de los nunca llamados (0,5 = mitad y mitad). Se sortea en cada pedido; si una de las dos poblaciones se agota, se usa la otra |
+
+**Grabación.** Se graban todas las llamadas de encuesta conectadas; las administrativas no. Las grabaciones se suben solas al almacenamiento de la casa y se escuchan desde la consola de supervisión.
 
 **Reintentos y franjas.** Cada resultado reintentable tiene su **espera**, un **tope** opcional y una **ventana**: *misma* (reintenta en la misma franja), *rotar* (siempre en otra franja) o *cualquiera*. Los valores de partida son los del sistema anterior: ocupado 30 min, no contesta y contestador 120 min, fuera de servicio y desconectado 180 min. Además está el tope de intentos por caso y por franja: al alcanzarlo, el caso pasa a no-contacto definitivo.
 
@@ -210,6 +218,7 @@ telefono;telefono2;identificador;estrato;area;nombre;segmento
 - Cualquier otra columna va a la **ficha**: se muestra al encuestador, se puede usar en el cuestionario como `{ficha.columna}` y sirve para cuotas por propiedad.
 - Las líneas con problemas se informan con su número y el resto se carga igual. También se informa cuántos casos tienen un número en la lista de no llamar.
 - Origen **Lista externa**: un agregado que no es parte del diseño. Queda fuera de las tasas del marco y se declara aparte.
+- **Semilla del orden aleatorio**: el orden en que se trabajan los casos sale de la semilla y de la fila del archivo. Si la dejás vacía se genera una; queda registrada en la guía. Con la misma semilla y el mismo archivo, el orden es el mismo: sirve para auditar cómo se trabajó la muestra.
 
 **Cuotas.** Una cuota es **por pregunta** (códigos de respuesta), **por propiedad de la ficha** (ej. segmento = Privado) o **por área**, con un objetivo absoluto o un % del objetivo del estudio. Las de ficha y área evitan que el sistema entregue casos que ya no sirven. Las de pregunta se controlan en cada pantalla durante la entrevista. Los casos derivados cuentan para la cuota.
 

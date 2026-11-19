@@ -14,7 +14,7 @@ EDITABLES = {
     "ventana_abandono_min", "min_agentes_predictivo",
     "fuera_marco_habilitado", "umbral_alerta_derivados", "sustitutos_habilitados",
     "ignorar_agendados", "preservar_encuestador",
-    "tope_intentos_caso", "tope_intentos_franja", "muestreo_grabacion", "zona_horaria",
+    "tope_intentos_caso", "tope_intentos_franja", "zona_horaria", "proporcion_frescos",
     "version_diccionario", "version_formulas",
 }
 ESTADOS = {"borrador", "activo", "pausado", "cerrado"}

@@ -373,3 +373,135 @@ def test_versiones_fijas_tras_activar(cur, esc):
     e = esc.estudio()
     with pytest.raises(psycopg.errors.RaiseException, match="versiones"):
         cur.execute("UPDATE invoke.estudio SET version_formulas = 1, version_diccionario = 2 WHERE id = %s", (e["id"],))
+
+
+def test_codec_g711_por_defecto_y_opus_por_puesto(cur, esc):
+    """Encargo de cierre D1 + H4: sin Opus salvo que el puesto lo tenga habilitado."""
+    from invoke.servicios import credenciales
+
+    a, b = esc.usuario("SinOpus"), esc.usuario("ConOpus")
+    cur.execute("UPDATE invoke.participante SET opus_habilitado = true WHERE id = %s", (b.participante_id,))
+    assert credenciales.rotar_sip(cur, a.participante_id, a.nombre)["codecs"] == "alaw,ulaw"
+    assert credenciales.rotar_sip(cur, b.participante_id, b.nombre)["codecs"] == "opus,alaw,ulaw"
+    filas = dict((r["id"], r["allow"]) for r in db.todos(cur, "SELECT id, allow FROM asterisk.ps_endpoints WHERE id = ANY(%s)",
+                                                         ([f"p{a.participante_id}", f"p{b.participante_id}"],)))
+    assert filas == {f"p{a.participante_id}": "alaw,ulaw", f"p{b.participante_id}": "opus,alaw,ulaw"}
+    # Deshabilitar Opus surte efecto en la próxima rotación.
+    cur.execute("UPDATE invoke.participante SET opus_habilitado = false WHERE id = %s", (b.participante_id,))
+    credenciales.rotar_sip(cur, b.participante_id, b.nombre)
+    assert db.uno(cur, "SELECT allow FROM asterisk.ps_endpoints WHERE id = %s", (f"p{b.participante_id}",))["allow"] == "alaw,ulaw"
+    # El valor por defecto de la columna ya no incluye Opus.
+    cur.execute("RESET ROLE")
+    d = db.uno(cur, """SELECT column_default FROM information_schema.columns
+                       WHERE table_schema = 'asterisk' AND table_name = 'ps_endpoints' AND column_name = 'allow'""")
+    cur.execute("SET ROLE invoke_app")
+    assert "opus" not in d["column_default"]
+
+
+# ───────────────────────── Encargo de cierre: H3 y H1 ─────────────────────────
+
+CSV_GUIA = "telefono;identificador\n" + "\n".join(f"09{1000000 + i};C{i:03d}" for i in range(40)) + "\n"
+
+
+def _orden_de_guia(cur, guia_id):
+    return [r["identificador"] for r in db.todos(
+        cur, "SELECT identificador FROM invoke.caso WHERE guia_id = %s ORDER BY orden_aleatorio", (guia_id,))]
+
+
+def test_semilla_reproduce_el_orden(cur, esc):
+    """H3: la misma guía con la misma semilla da el mismo orden; con otra semilla, otro."""
+    from invoke.servicios import muestra
+
+    e1, e2 = esc.estudio(), esc.estudio()
+    a = esc.usuario("Adm", roles=("administrador",))
+    g1 = muestra.cargar_guia(cur, e1["id"], "g", CSV_GUIA, a.uid, semilla=12345)
+    g2 = muestra.cargar_guia(cur, e2["id"], "g", CSV_GUIA, a.uid, semilla=12345)
+    g3 = muestra.cargar_guia(cur, e2["id"], "g3", CSV_GUIA, a.uid, semilla=999)
+    o1, o2, o3 = (_orden_de_guia(cur, g["guia_id"]) for g in (g1, g2, g3))
+    assert o1 == o2 and o1 != o3
+    assert o1 != sorted(o1)                                 # no es el orden del archivo
+    ev = db.uno(cur, "SELECT datos FROM invoke.evento WHERE tipo = 'muestra_cargada' AND estudio_id = %s", (e1["id"],))
+    assert ev["datos"]["semilla"] == 12345
+    # Sin semilla explícita se genera una y queda registrada.
+    g4 = muestra.cargar_guia(cur, e1["id"], "g4", CSV_GUIA, a.uid)
+    assert db.uno(cur, "SELECT semilla FROM invoke.guia WHERE id = %s", (g4["guia_id"],))["semilla"] == g4["semilla"]
+    # El orden no se modifica después.
+    cur.execute("SAVEPOINT a")
+    with pytest.raises(psycopg.errors.RaiseException, match="no se modifican"):
+        cur.execute("UPDATE invoke.caso SET orden_aleatorio = 0.5 WHERE guia_id = %s", (g1["guia_id"],))
+    cur.execute("ROLLBACK TO SAVEPOINT a")
+
+
+def test_el_pool_lee_el_indice(cur, esc):
+    """H3: con una guía grande, tomar el siguiente caso es una lectura del índice, no un ordenamiento."""
+    e = esc.estudio()
+    cur.execute("RESET ROLE")
+    cur.execute("""INSERT INTO invoke.caso (estudio_id, guia_id, posicion)
+                   SELECT %s, %s, g FROM generate_series(1, 20000) g""", (e["id"], e["guia_id"]))
+    cur.execute("""INSERT INTO invoke.telefono (caso_id, estudio_id, numero)
+                   SELECT id, estudio_id, '09' || (1000000 + id)::text FROM invoke.caso WHERE guia_id = %s""", (e["guia_id"],))
+    cur.execute("ANALYZE invoke.caso; ANALYZE invoke.caso_estado; ANALYZE invoke.telefono")
+    cur.execute("""EXPLAIN SELECT ce.caso_id FROM invoke.caso c JOIN invoke.caso_estado ce ON ce.caso_id = c.id
+                   WHERE c.estudio_id = %s AND c.guia_id = %s AND ce.activo AND ce.asignado_a IS NULL
+                     AND ce.estado = 'pendiente' AND ce.disponible_desde <= now() AND (ce.intentos = 0) = true
+                   ORDER BY c.orden_aleatorio LIMIT 1 FOR UPDATE OF ce SKIP LOCKED""", (e["id"], e["guia_id"]))
+    plan = "\n".join(r["QUERY PLAN"] for r in cur.fetchall())
+    cur.execute("SET ROLE invoke_app")
+    assert "caso_pool_idx" in plan and "Sort" not in plan, plan
+
+
+def _pool_con(cur, esc, frescos, reintentos, **params):
+    e = esc.estudio(**params)
+    for _ in range(frescos + reintentos):
+        esc.caso(e)
+    if reintentos:
+        cur.execute("RESET ROLE")
+        cur.execute("""UPDATE invoke.caso_estado SET intentos = 1
+                       WHERE caso_id IN (SELECT id FROM invoke.caso WHERE estudio_id = %s ORDER BY id LIMIT %s)""",
+                    (e["id"], reintentos))
+        cur.execute("SET ROLE invoke_app")
+    return e
+
+
+def test_mezcla_de_frescos_sorteada_en_cada_pedido(cur, esc):
+    """H1: con 1.000 pedidos, la proporción observada de frescos cae a ±3 puntos de la configurada."""
+    e = _pool_con(cur, esc, 60, 60, proporcion_frescos=0.3)
+    a = esc.usuario()
+    esc.sesion(a, e)
+    cur.execute("SELECT setseed(0.42)")
+    frescos = 0
+    for _ in range(1000):
+        caso = db.uno(cur, "SELECT invoke.asignar_caso(%s, %s) AS c", (a.participante_id, e["id"]))["c"]
+        ev = db.uno(cur, "SELECT datos FROM invoke.evento WHERE caso_id = %s AND tipo = 'caso_asignado' ORDER BY id DESC LIMIT 1",
+                    (caso,))
+        fresco = ev["datos"]["poblacion"] == "fresco"
+        assert fresco == (db.uno(cur, "SELECT intentos FROM invoke.caso_estado WHERE caso_id = %s", (caso,))["intentos"] == 0)
+        frescos += fresco
+        db.evento(cur, "caso_liberado", caso_id=caso, participante_id=a.participante_id, datos={"motivo": "test"})
+    assert abs(frescos / 1000 - 0.3) <= 0.03, frescos
+    r = db.uno(cur, "SELECT * FROM invoke.reparto_frescos(%s, now() - interval '1 day')", (e["id"],))
+    assert r["frescos"] == frescos and r["reintentos"] == 1000 - frescos and float(r["configurada"]) == 0.3
+
+
+def test_si_la_poblacion_sorteada_esta_vacia_se_usa_la_otra(cur, esc):
+    """H1: con proporcion_frescos = 1 y sin frescos, el asignador devuelve reintentos, nunca NULL."""
+    e = _pool_con(cur, esc, 0, 5, proporcion_frescos=1)
+    usuarios = [esc.usuario() for _ in range(5)]
+    for u in usuarios:
+        esc.sesion(u, e)
+        caso = estacion.siguiente_caso(cur, u)
+        assert caso is not None and caso["intentos"] == 1
+    # Sin nada en el pool, recién ahí devuelve NULL.
+    otro = esc.usuario()
+    esc.sesion(otro, e)
+    assert estacion.siguiente_caso(cur, otro) is None
+
+
+def test_pacer_mezcla_y_graba(cur, esc):
+    e = _pool_con(cur, esc, 3, 3, modo_discado="power", proporcion_frescos=0.5)
+    filas = db.todos(cur, "SELECT * FROM invoke.reservar_casos_pacer(%s, 6)", (e["id"],))
+    assert len(filas) == 6
+    datos = [r["datos"] for r in db.todos(cur, "SELECT datos FROM invoke.evento WHERE estudio_id = %s AND tipo = 'llamada_originada'",
+                                          (e["id"],))]
+    assert all(d["grabar"] is True for d in datos)
+    assert sorted(d["poblacion"] for d in datos) == ["fresco"] * 3 + ["reintento"] * 3

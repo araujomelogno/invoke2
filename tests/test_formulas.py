@@ -120,3 +120,53 @@ def test_de_punta_a_punta(cur, esc, conn):
     tomar(casos["nunca"])
     esc.intento(a, casos["nunca"], 4, 4)
     assert db.uno(cur, "SELECT invoke.conteo_tasas(%s, 'parcial', %s) AS c", (e["id"], t))["c"]["marco"] == antes
+
+
+def test_los_reportes_leen_el_diccionario_del_estudio(cur, esc):
+    """Encargo de cierre D5 y regla 12: un estudio con diccionario v2 se reporta con la
+    semántica de v2. En este v2 de prueba, el código 30 deja de ser abandono (AB) y pasa
+    a elegibilidad desconocida (UD); con v1 el mismo caso es AB."""
+    cur.execute("RESET ROLE")
+    cur.execute("INSERT INTO invoke.version_documento VALUES ('diccionario', 2, now(), 'v2 de prueba')")
+    cur.execute("INSERT INTO invoke.version_diccionario (version) VALUES (2)")
+    cur.execute("""INSERT INTO invoke.disposicion_telefono
+                   SELECT 2, codigo, etiqueta, comportamiento, estado, cuenta_intento, es_estado_interno,
+                          CASE WHEN codigo = 30 THEN 'UD' ELSE simbolo END, activa_sustituto, equivalente_cdr, sin_equivalente
+                   FROM invoke.disposicion_telefono WHERE version_diccionario = 1""")
+    cur.execute("""INSERT INTO invoke.disposicion_encuesta
+                   SELECT 2, codigo, etiqueta, comportamiento, final, es_estado_interno, extendido, simbolo, efecto_caso,
+                          activa_sustituto, visible_encuestador, equivalente_cdr, sin_equivalente
+                   FROM invoke.disposicion_encuesta WHERE version_diccionario = 1""")
+    cur.execute("""INSERT INTO invoke.regla_reintento_defecto
+                   SELECT 2, codigo_telefono, espera_min, tope, ventana FROM invoke.regla_reintento_defecto
+                   WHERE version_diccionario = 1""")
+    cur.execute("SET ROLE invoke_app")
+
+    resultados = {}
+    for version in (1, 2):
+        e = esc.estudio(modo_discado="power", version_diccionario=version, tope_intentos_caso=1)
+        c = esc.caso(e)
+        ll = db.todos(cur, "SELECT * FROM invoke.reservar_casos_pacer(%s, 1)", (e["id"],))[0]["llamada_id"]
+        db.evento(cur, "llamada_atendida", caso_id=c["id"], llamada_id=ll)
+        db.evento(cur, "llamada_abandonada", caso_id=c["id"], llamada_id=ll)
+        db.evento(cur, "disposicion_telefono", caso_id=c["id"], llamada_id=ll, datos={"codigo": 30, "automatica": True})
+        conteo = db.uno(cur, "SELECT invoke.conteo_tasas(%s, 'cierre') AS c", (e["id"],))["c"]["marco"]
+        ab = db.uno(cur, "SELECT * FROM invoke.tasa_abandono(%s, now() - interval '1 hour', now() + interval '1 min')",
+                    (e["id"],))
+        resultados[version] = (conteo["AB"], conteo["UD"], ab["abandonadas"])
+    assert resultados[1] == (1, 0, 1)
+    assert resultados[2] == (0, 1, 0)
+
+
+def test_literales_que_quedan(cur, esc):
+    """D5: los literales que quedan en los reportes, documentados en 0011, con su test.
+    'UD' para el caso nunca resuelto al cierre y 31 como contestador detectado."""
+    e = esc.estudio(modo_discado="power")
+    esc.caso(e)
+    assert db.uno(cur, "SELECT invoke.conteo_tasas(%s, 'cierre') AS c", (e["id"],))["c"]["marco"]["UD"] == 1
+    c = esc.caso(e)
+    ll = db.todos(cur, "SELECT * FROM invoke.reservar_casos_pacer(%s, 1)", (e["id"],))[0]["llamada_id"]
+    db.evento(cur, "llamada_atendida", caso_id=c["id"], llamada_id=ll)
+    db.evento(cur, "disposicion_telefono", caso_id=c["id"], llamada_id=ll, datos={"codigo": 31, "automatica": True})
+    ab = db.uno(cur, "SELECT * FROM invoke.tasa_abandono(%s, now() - interval '1 hour', now() + interval '1 min')", (e["id"],))
+    assert ab["amd_maquina"] == 1 and ab["abandonadas"] == 0

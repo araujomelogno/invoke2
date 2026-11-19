@@ -162,7 +162,28 @@ docker run -d --name turn --network host --restart always \
 
 Antes de copiar `infra/coturn/turnserver.conf`, reemplazá `${TURN_SECRETO}` y `${PBX_IP_PUBLICA}` (con `envsubst`). El relay solo acepta como destino al PBX.
 
-## 6. Servicios de Cloud Run
+## 6. Bucket de grabaciones
+
+Se graban todas las llamadas de encuesta. El servicio `ari` las baja del PBX, las sube a este bucket y las borra del disco del PBX; sin el bucket, el disco se llena en días.
+
+```bash
+gcloud storage buckets create gs://$PROYECTO-grabaciones --location=$REGION \
+  --uniform-bucket-level-access --public-access-prevention
+# Retención: pendiente de decisión (decisiones.md, P-11). Ejemplo para borrar a los 365 días:
+cat > retencion.json <<'EOF'
+{"rule": [{"action": {"type": "Delete"}, "condition": {"age": 365}}]}
+EOF
+gcloud storage buckets update gs://$PROYECTO-grabaciones --lifecycle-file=retencion.json
+```
+
+Permisos:
+
+- La cuenta de servicio de `ari` sube objetos: `roles/storage.objectCreator` sobre el bucket.
+- La cuenta de servicio de Functions firma las URL para escuchar desde la consola: `roles/storage.objectViewer` sobre el bucket y `roles/iam.serviceAccountTokenCreator` sobre sí misma.
+
+Del orden de 25 GB por mes de operativo a sala llena. Conviene mirar `SELECT count(*) FROM invoke.grabacion_pendiente`: tiene que quedar cerca de cero.
+
+## 7. Servicios de Cloud Run
 
 ```bash
 gcloud artifacts repositories create invoke --repository-format=docker --location=$REGION
@@ -178,7 +199,7 @@ COMUN="--region=$REGION --vpc-connector=invoke-vpc --vpc-egress=private-ranges-o
 gcloud run deploy ari --image=$REGION-docker.pkg.dev/$PROYECTO/invoke/ari $COMUN \
   --min-instances=1 --max-instances=1 --no-cpu-throttling --ingress=internal --no-allow-unauthenticated \
   --set-secrets=ARI_CLAVE=ARI_CLAVE:latest \
-  --set-env-vars=ARI_URL=http://IP_PRIVADA_PBX:8088/ari,INVOKE_TRUNK='PJSIP/{numero}@trunk'
+  --set-env-vars=ARI_URL=http://IP_PRIVADA_PBX:8088/ari,INVOKE_TRUNK='PJSIP/{numero}@trunk',GRABACIONES_BUCKET=$PROYECTO-grabaciones
 
 gcloud run deploy pacer --image=$REGION-docker.pkg.dev/$PROYECTO/invoke/pacer $COMUN \
   --min-instances=1 --max-instances=1 --no-cpu-throttling --ingress=internal --no-allow-unauthenticated
@@ -190,11 +211,11 @@ gcloud run deploy sala --image=$REGION-docker.pkg.dev/$PROYECTO/invoke/sala $COM
 
 La sala es pública pero autenticada: el primer mensaje de cada WebSocket trae el token de Firebase, que se verifica antes de suscribir. Sin token válido, la sala cierra la conexión con el código 4401.
 
-## 7. Firebase: Auth, Functions y Hosting
+## 8. Firebase: Auth, Functions y Hosting
 
 1. **Auth.** En la consola de Firebase, habilitá el proveedor «Correo y contraseña» y agregá el dominio de Hosting a los dominios autorizados.
 2. **Configuración de la web.** Editá `web/js/config.js` con la configuración web del proyecto (no es secreta) y con `salaWs: 'wss://<url-de-sala>/sala'`.
-3. **Variables de la función.** Creá `functions/.env.<proyecto>` con `SIP_WSS=wss://pbx.<dominio>:8089/ws`, `SIP_DOMINIO=pbx.<dominio>`, `TURN_URLS=turn:turn.<dominio>:3478?transport=udp,turns:turn.<dominio>:5349?transport=tcp` y `STUN_URLS=stun:turn.<dominio>:3478`. `INVOKE_AUTH_DEV` no se define nunca.
+3. **Variables de la función.** Creá `functions/.env.<proyecto>` con `INVOKE_DB_POOL=10` (conexiones por instancia; coincide con `concurrency` en `functions/main.py`), `INVOKE_DB_ESPERA_S=8`, `SIP_WSS=wss://pbx.<dominio>:8089/ws`, `SIP_DOMINIO=pbx.<dominio>`, `TURN_URLS=turn:turn.<dominio>:3478?transport=udp,turns:turn.<dominio>:5349?transport=tcp` y `STUN_URLS=stun:turn.<dominio>:3478`. `INVOKE_AUTH_DEV` no se define nunca.
 4. **Functions.** En `functions/main.py` ya están la región, el conector VPC y los secretos que usa. El predeploy copia `invoke/` y `schemas/` adentro de `functions/`.
    ```bash
    echo '{"projects":{"default":"'$PROYECTO'"}}' > .firebaserc
@@ -205,7 +226,7 @@ La sala es pública pero autenticada: el primer mensaje de cada WebSocket trae e
    firebase deploy --only hosting
    ```
 
-## 8. Primer administrador
+## 9. Primer administrador
 
 Creá la cuenta en Firebase Auth (consola o CLI) y dala de alta en la base con su `uid`. Desde ahí, los demás usuarios se crean desde **Administración → Usuarios**.
 
@@ -214,7 +235,7 @@ INSERT INTO invoke.usuario (uid, email, nombre, roles)
 VALUES ('UID_DE_FIREBASE', 'coordinacion@equipos.com.uy', 'Coordinación', ARRAY['administrador','investigador','supervisor']);
 ```
 
-## 9. Verificación después de desplegar
+## 10. Verificación después de desplegar
 
 1. `GET https://<hosting>/api/salud` responde `{"ok": true}`.
 2. Entrar como administrador, crear un estudio de prueba marcado como **prueba o capacitación**, publicar el cuestionario de ejemplo (`schemas/ejemplos/satisfaccion_clientes.json`, desde «Importar JSON» del editor) y cargar una guía con un número propio.
@@ -223,6 +244,8 @@ VALUES ('UID_DE_FIREBASE', 'coordinacion@equipos.com.uy', 'Coordinación', ARRAY
 5. Desde la consola de supervisión, conectar el audio de escucha y escuchar la llamada. La calidad de red del puesto tiene que aparecer en la tarjeta.
 6. Clasificar, abrir **Reportes** y ver el intento. El estudio de prueba no da ficha técnica, porque no es un estudio.
 7. Revisar los logs de `ari`: tiene que figurar «conectado a ARI» y ningún comando en error (`SELECT * FROM invoke.comando_telefonia WHERE estado = 'error'`).
+8. Unos minutos después de la llamada, la grabación tiene que estar en el bucket (`SELECT * FROM invoke.grabacion_en_bucket ORDER BY subida_en DESC LIMIT 1`) y no en el PBX.
+9. Códec: con el puesto sin Opus, la tarjeta de la consola dice PCMA o PCMU y `asterisk -rx "core show channels verbose"` no muestra transcodificación. Repetir con un usuario con Opus habilitado y verificar que ahí sí aparece.
 
 ## Actualizar y operar
 
@@ -246,6 +269,8 @@ Para rotar `TURN_SECRETO` o `ARI_CLAVE`, se crea una versión nueva y se redespl
 | Indicador | Cómo | Para qué |
 | --- | --- | --- |
 | Comandos en error | `invoke.comando_telefonia` con `estado = 'error'` | Si suben, revisar el trunk o ARI |
+| Grabaciones sin subir | `SELECT count(*) FROM invoke.grabacion_pendiente` | Si crece, el disco del PBX se está llenando |
+| Puestos en Opus | Consola: «N en Opus · Asterisk transcodifica» | Cada uno es transcodificación permanente |
 | Proporción por TURN | `avg(relay::int)` sobre `invoke.calidad_red` del día | Insumo de ADR-005 |
 | Abandono real | Consola → indicadores del discador | Por encima del objetivo, bajar N |
 | Proyección íntegra | `SELECT invoke.reconstruir_caso_estado(id)` sobre los casos afectados, como dueño de la base | Después de un incidente |

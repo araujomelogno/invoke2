@@ -31,6 +31,7 @@ class Puerto(Protocol):
     def tomar_participante(self, llamada_id: str) -> int | None: ...
     def canal_de(self, participante_id: int) -> str | None: ...
     def tiene_disposicion(self, llamada_id: str) -> bool: ...
+    def estado_llamada(self, llamada_id: str) -> dict: ...
     # ARI
     def responder(self, canal: str) -> None: ...
     def puente_de(self, participante_id: int) -> str: ...
@@ -42,6 +43,9 @@ class Puerto(Protocol):
 
 @dataclass
 class EstadoLlamada:
+    """Caché en memoria de una llamada en curso. La fuente es la base (encargo de
+    cierre D2): ante un reinicio, el estado se lee de invoke.llamada."""
+
     llamada_id: str
     atendida: bool = False
     conectada: bool = False
@@ -56,21 +60,30 @@ class Traductor:
     puestos: dict[str, int] = field(default_factory=dict)        # canal → participante
     snoops: dict[str, int] = field(default_factory=dict)         # canal snoop → supervisor
 
+    def registrar_originada(self, llamada_id: str) -> None:
+        """La llamada existe desde que se origina, no desde que atienden (encargo D3):
+        así el estado Ringing, que llega antes de StasisStart, se reconoce."""
+        self.llamadas.setdefault(llamada_id, EstadoLlamada(llamada_id))
+
     def manejar(self, ev: dict) -> None:
         tipo = ev.get("type")
         canal = (ev.get("channel") or {}).get("id")
         if tipo == "StasisStart":
             self._stasis(ev["args"], canal, ev.get("timestamp"))
-        elif tipo == "ChannelStateChange" and canal in self.llamadas:
-            if (ev["channel"].get("state") in ESTADOS_TIMBRE):
+        elif tipo == "ChannelStateChange" and (ev.get("channel") or {}).get("state") in ESTADOS_TIMBRE:
+            # Si el proceso reinició después de originar, la memoria no la tiene: se pregunta a la base.
+            if canal in self.llamadas or (canal not in self.puestos and self.puerto.llamada(canal) is not None):
+                self.llamadas.setdefault(canal, EstadoLlamada(canal))
                 self.puerto.evento("llamada_timbrando", llamada_id=canal, ocurrido_en=ev.get("timestamp"))
         elif tipo == "ChannelDestroyed":
             self._destruido(canal, ev.get("cause"), ev.get("timestamp"))
         elif tipo == "RecordingFinished":
             nombre = (ev.get("recording") or {}).get("name", "")
             if nombre.startswith("llamada-"):
-                self.puerto.evento("grabacion", llamada_id=nombre[8:], datos={"archivo": nombre + ".wav"},
-                                   ocurrido_en=ev.get("timestamp"))
+                info = self.puerto.llamada(nombre[8:]) or {}
+                self.puerto.evento("grabacion", llamada_id=nombre[8:], caso_id=info.get("caso_id"),
+                                   estudio_id=info.get("estudio_id"),
+                                   datos={"archivo": nombre + ".wav", "nombre": nombre}, ocurrido_en=ev.get("timestamp"))
 
     # ── StasisStart ──
 
@@ -146,16 +159,23 @@ class Traductor:
         info = self.puerto.llamada(canal)
         if info is None:
             return
-        est = self.llamadas.pop(canal, EstadoLlamada(canal))
+        cache = self.llamadas.pop(canal, EstadoLlamada(canal))
+        # Encargo de cierre D2: el estado sale de la base (atendida_en, conectada_en,
+        # amd_resultado, llamada_abandonada), no de la memoria, que se pierde al reiniciar.
+        base = self.puerto.estado_llamada(canal) or {}
+        atendida = bool(base.get("atendida")) or cache.atendida
+        conectada = bool(base.get("conectada")) or cache.conectada
+        abandonada = bool(base.get("abandonada")) or cache.abandonada
+        amd = base.get("amd") or cache.amd
+        participante = base.get("participante_id") or info.get("participante_id")
         self.puerto.evento("llamada_finalizada", llamada_id=canal, caso_id=info.get("caso_id"),
-                           participante_id=info.get("participante_id") if est.conectada or info.get("participante_id") else None,
-                           datos={"causa": causa}, ocurrido_en=t)
+                           participante_id=participante, datos={"causa": causa}, ocurrido_en=t)
         if info.get("tipo") == "administrativa" or info.get("caso_id") is None:
             return
         if self.puerto.tiene_disposicion(canal):
             return
-        codigo = telefonia.disposicion_por_fin(atendida=est.atendida, conectada=est.conectada, amd=est.amd,
-                                               causa=causa, abandonada=est.abandonada)
+        codigo = telefonia.disposicion_por_fin(atendida=atendida, conectada=conectada, amd=amd,
+                                               causa=causa, abandonada=abandonada)
         if codigo is not None:
             self.puerto.evento("disposicion_telefono", llamada_id=canal, caso_id=info["caso_id"],
                                datos={"codigo": codigo, "automatica": True, "causa": causa}, ocurrido_en=t)

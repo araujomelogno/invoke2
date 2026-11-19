@@ -1,6 +1,7 @@
 # Privilegios esperados. Generado por scripts/verificar_accesos.py --regenerar
 # y revisado a mano. Un privilegio nuevo se agrega acá en el mismo PR que la migración.
 funcion invoke_app EXECUTE invoke.agregar_telefono(bigint,text,text)
+funcion invoke_app EXECUTE invoke.areas_llenas(bigint)
 funcion invoke_app EXECUTE invoke.asignar_caso(bigint,bigint)
 funcion invoke_app EXECUTE invoke.calcular_proximo_intento(bigint,timestamp with time zone,text,text,jsonb)
 funcion invoke_app EXECUTE invoke.caso_en_cuota(invoke.cuota,invoke.caso)
@@ -13,8 +14,11 @@ funcion invoke_app EXECUTE invoke.etiqueta_cdr(text,boolean,smallint,text)
 funcion invoke_app EXECUTE invoke.evaluar_cuotas(bigint,jsonb)
 funcion invoke_app EXECUTE invoke.franja_de(bigint,timestamp with time zone)
 funcion invoke_app EXECUTE invoke.normalizar_telefono(text)
+funcion invoke_app EXECUTE invoke.orden_determinista(bigint,bigint)
 funcion invoke_app EXECUTE invoke.pool_elegible(bigint,timestamp with time zone)
 funcion invoke_app EXECUTE invoke.productividad(bigint,timestamp with time zone,timestamp with time zone)
+funcion invoke_app EXECUTE invoke.propiedades_llenas(bigint)
+funcion invoke_app EXECUTE invoke.reparto_frescos(bigint,timestamp with time zone)
 funcion invoke_app EXECUTE invoke.reservar_casos_pacer(bigint,integer)
 funcion invoke_app EXECUTE invoke.tasa_abandono(bigint,timestamp with time zone,timestamp with time zone)
 funcion invoke_app EXECUTE invoke.tasa_contacto_observada(bigint,text,timestamp with time zone)
@@ -26,6 +30,7 @@ funcion invoke_lectura EXECUTE invoke.conteo_tasas(bigint,text,timestamp with ti
 funcion invoke_lectura EXECUTE invoke.etiqueta_cdr(text,boolean,smallint,text)
 funcion invoke_lectura EXECUTE invoke.franja_de(bigint,timestamp with time zone)
 funcion invoke_lectura EXECUTE invoke.productividad(bigint,timestamp with time zone,timestamp with time zone)
+funcion invoke_lectura EXECUTE invoke.reparto_frescos(bigint,timestamp with time zone)
 funcion invoke_lectura EXECUTE invoke.tasa_abandono(bigint,timestamp with time zone,timestamp with time zone)
 funcion invoke_lectura EXECUTE invoke.tasa_contacto_observada(bigint,text,timestamp with time zone)
 secuencia invoke_app USAGE invoke.calidad_red_id_seq
@@ -87,6 +92,8 @@ tabla invoke_app SELECT invoke.estudio
 tabla invoke_app SELECT invoke.estudio_usuario
 tabla invoke_app SELECT invoke.evento
 tabla invoke_app SELECT invoke.franja
+tabla invoke_app SELECT invoke.grabacion_en_bucket
+tabla invoke_app SELECT invoke.grabacion_pendiente
 tabla invoke_app SELECT invoke.guia
 tabla invoke_app SELECT invoke.lista_negra
 tabla invoke_app SELECT invoke.llamada
@@ -129,6 +136,8 @@ tabla invoke_lectura SELECT invoke.disposicion_encuesta
 tabla invoke_lectura SELECT invoke.disposicion_telefono
 tabla invoke_lectura SELECT invoke.estudio
 tabla invoke_lectura SELECT invoke.evento
+tabla invoke_lectura SELECT invoke.grabacion_en_bucket
+tabla invoke_lectura SELECT invoke.grabacion_pendiente
 tabla invoke_lectura SELECT invoke.guia
 tabla invoke_lectura SELECT invoke.llamada
 tabla invoke_lectura SELECT invoke.participante

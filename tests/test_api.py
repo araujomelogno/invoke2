@@ -77,3 +77,54 @@ def test_flujo_completo(conn, esc):
     assert "origen" in texto.splitlines()[0] and ",marco," in texto
     st, sala = pedir("GET", "/api/supervision/sala", adm.uid)
     assert st == 200 and sala[0]["nombre"] == "Enc"
+
+
+def test_el_puesto_no_toca_casos_ajenos(conn, esc):
+    """Encargo de cierre D4: leer respuestas, iniciar y clasificar exigen que el caso sea del encuestador."""
+    e = esc.estudio()
+    a, b = esc.usuario("Ana"), esc.usuario("Beto")
+    esc.sesion(a, e)
+    esc.sesion(b, e)
+    c = esc.caso(e)
+    from invoke.servicios import estacion
+    estacion.siguiente_caso(esc.cur, a)                      # el caso es de Ana
+    ll = estacion.llamar(esc.cur, a, {"caso_id": c["id"], "telefono_id": c["telefono_id"]})["llamada_id"]
+    assert pedir("GET", f"/api/estacion/casos/{c['id']}/respuestas", a.uid)[0] == 200
+    assert pedir("GET", f"/api/estacion/casos/{c['id']}/respuestas", b.uid)[0] == 409
+    assert pedir("POST", f"/api/estacion/casos/{c['id']}/iniciar", b.uid, {"llamada_id": ll})[0] == 409
+    st, r = pedir("POST", "/api/estacion/finalizar", b.uid, {"caso_id": c["id"], "llamada_id": ll,
+                                                             "disposicion_telefono": 6})
+    assert st == 409 and "no está asignado" in r["error"]
+    assert pedir("POST", f"/api/estacion/casos/{c['id']}/cuotas", b.uid, {"respuestas": {}})[0] == 409
+    # Ana, que tiene el caso, sí puede clasificarlo.
+    assert pedir("POST", "/api/estacion/finalizar", a.uid, {"caso_id": c["id"], "llamada_id": ll,
+                                                            "disposicion_telefono": 6})[0] == 200
+
+
+def test_errores_inesperados_y_pool_agotado_son_respuestas(conn, monkeypatch):
+    """Encargo M2 y M3: lo inesperado es un 500 con JSON y el pool agotado, un 503."""
+    from psycopg_pool import PoolTimeout
+
+    def revienta(p):
+        raise RuntimeError("bug")
+
+    def agotado(p):
+        raise PoolTimeout("sin conexiones")
+
+    monkeypatch.setattr(api.app, "rutas", list(api.app.rutas))
+    api.app.ruta("GET", "/api/prueba/revienta", publica=True)(revienta)
+    api.app.ruta("GET", "/api/prueba/agotado", publica=True)(agotado)
+    st, r = pedir("GET", "/api/prueba/revienta")
+    assert st == 500 and "error interno" in r["error"]
+    st, r = pedir("GET", "/api/prueba/agotado")
+    assert st == 503
+
+
+def test_sala_solo_recalcula_los_estudios_que_cambiaron():
+    """Encargo M4."""
+    from services.sala.main import Sala
+
+    s = Sala()
+    s.supervisores = {"ws1": 1, "ws2": 2, "ws3": None, "ws4": 1}
+    assert dict(s.destinatarios({1})) == {1: ["ws1", "ws4"], None: ["ws3"]}
+    assert dict(s.destinatarios(set())) == {None: ["ws3"]}

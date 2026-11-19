@@ -48,7 +48,7 @@ def main() -> None:
         cur.execute("UPDATE invoke.estudio SET estado = 'activo' WHERE id = %s", (e["id"],))
         for uid in ("dev-enc1", "dev-enc2", "dev-enc3"):
             cur.execute("INSERT INTO invoke.estudio_usuario VALUES (%s, %s)", (e["id"], uid))
-        g = db.uno(cur, "INSERT INTO invoke.guia (estudio_id, nombre) VALUES (%s, 'Base cliente oct-2026') RETURNING id", (e["id"],))
+        g = db.uno(cur, "INSERT INTO invoke.guia (estudio_id, nombre, semilla) VALUES (%s, 'Base cliente oct-2026', 20261029) RETURNING id", (e["id"],))
         casos = []
         for i in range(40):
             n = NOMBRES[i % len(NOMBRES)]

@@ -92,7 +92,8 @@ async function parametros() {
           <div class="field-hint">En manual los parámetros de sobre-discado no aplican: el encuestador marca y el sistema registra.</div></div>
         <div class="form-row">${campo('p-n_inicial', 'N inicial', e.n_inicial, 'Llamadas por encuestador disponible al arrancar')}${campo('p-n_maximo', 'N máximo', e.n_maximo, 'Techo duro, no superable por el ajuste')}</div>
         <div class="form-row">${campo('p-abandono_objetivo', 'Abandono objetivo', e.abandono_objetivo, 'Proporción: 0,03 = 3 %')}${campo('p-ventana_abandono_min', 'Ventana (min)', e.ventana_abandono_min, 'Ventana deslizante, entre 30 y 60')}</div>
-        <div class="form-row">${campo('p-min_agentes_predictivo', 'Mínimo de agentes para predictivo', e.min_agentes_predictivo, 'Por debajo cae a power')}${campo('p-muestreo_grabacion', 'Muestreo de grabación', e.muestreo_grabacion, '0,10 = una de cada diez')}</div>
+        <div class="form-row">${campo('p-min_agentes_predictivo', 'Mínimo de agentes para predictivo', e.min_agentes_predictivo, 'Por debajo cae a power')}${campo('p-proporcion_frescos', 'Proporción de casos frescos', e.proporcion_frescos, 'Probabilidad de sortear un caso nunca llamado en cada pedido: 0,5 = mitad y mitad')}</div>
+        <p class="field-hint">Se graban todas las llamadas de encuesta conectadas.</p>
         ${check('p-ajuste_automatico', 'Ajuste automático de N', e.ajuste_automatico)}
       </div></div>
       <div class="card"><div class="card-header"><span class="card-header-title">Estudio y muestra</span><span>${badgeEstado(e.estado)}</span></div><div class="card-body">
@@ -169,11 +170,11 @@ async function guardarParametros(d) {
 async function muestra() {
   const e = S.estudio = await api('GET', `/api/estudios/${S.estudio.id}`);
   $('#main').innerHTML = encabezado('Muestra', nombreEstudio(), 'Guías cargadas (phonebooks). Columnas: telefono, telefono2…, identificador, estrato, area, sustituto, grupo_sustituto; el resto va a la ficha.') +
-    `<div class="card"><div class="card-body tight"><div class="table-wrap"><table><thead><tr><th>Guía</th><th>Casos</th><th>Fuera de marco</th><th>Tope fuera de marco</th><th>Prioridad</th><th>Activa</th><th>Cargada</th></tr></thead><tbody>
+    `<div class="card"><div class="card-body tight"><div class="table-wrap"><table><thead><tr><th>Guía</th><th>Casos</th><th>Fuera de marco</th><th>Tope fuera de marco</th><th>Prioridad</th><th>Semilla</th><th>Activa</th><th>Cargada</th></tr></thead><tbody>
     ${e.guias.map((/** @type {any} */ g) => `<tr><td class="td-strong">${esc(g.nombre)}</td><td>${g.casos}</td><td>${g.fuera_marco}</td>
-      <td>${g.tope_fuera_marco != null ? `${(g.tope_fuera_marco * 100).toFixed(0)}%` : 'sin tope'}</td><td>${g.prioridad}</td>
+      <td>${g.tope_fuera_marco != null ? `${(g.tope_fuera_marco * 100).toFixed(0)}%` : 'sin tope'}</td><td>${g.prioridad}</td><td class="td-muted mono">${esc(g.semilla)}</td>
       <td>${ADMIN ? `<button class="btn btn-outline btn-sm" data-guia="${g.id}" data-activa="${g.activa}">${g.activa ? 'Desactivar' : 'Activar'}</button>` : g.activa ? 'sí' : 'no'}</td>
-      <td class="td-muted">${fechaHora(g.cargada_en)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty-state">Sin guías cargadas.</td></tr>'}
+      <td class="td-muted">${fechaHora(g.cargada_en)}</td></tr>`).join('') || '<tr><td colspan="8" class="empty-state">Sin guías cargadas.</td></tr>'}
     </tbody></table></div></div></div>
     ${ADMIN ? `<div class="card mt"><div class="card-header"><span class="card-header-title">Cargar guía</span></div><div class="card-body">
       <div class="form-row"><div class="form-group"><label>Nombre</label><input type="text" id="g-nombre" /></div>
@@ -181,6 +182,8 @@ async function muestra() {
           <option value="lista_externa">Lista externa (agregado, fuera de marco)</option></select></div></div>
       <div class="form-row"><div class="form-group"><label>Prioridad</label><input type="number" id="g-prio" value="0" /></div>
         <div class="form-group"><label>Tope de fuera de marco</label><input type="number" id="g-tope" step="0.01" placeholder="vacío = sin tope" /></div></div>
+      <div class="form-group"><label>Semilla del orden aleatorio</label><input type="number" id="g-semilla" placeholder="vacío = se genera una" />
+        <div class="field-hint">El orden en que se trabajan los casos sale de la semilla y la fila del archivo: con la misma semilla, el mismo orden.</div></div>
       <div class="form-group"><label>Archivo CSV</label><input type="file" id="g-archivo" accept=".csv,text/csv" /></div>
       <button class="btn btn-orange" id="g-cargar">Cargar</button><div id="g-res" class="mt"></div></div></div>` : ''}`;
   $$('[data-guia]').forEach((b) => { b.onclick = async () => { await api('PATCH', `/api/guias/${b.dataset.guia}`, { activa: b.dataset.activa !== 'true' }); muestra(); }; });
@@ -191,8 +194,8 @@ async function muestra() {
     $('#g-cargar').disabled = true;
     try {
       const r = await api('POST', `/api/estudios/${e.id}/guias`, { nombre: $('#g-nombre').value.trim(), csv: await archivo.text(),
-        origen: $('#g-origen').value, prioridad: Number($('#g-prio').value || 0), tope_fuera_marco: $('#g-tope').value === '' ? null : Number($('#g-tope').value) });
-      $('#g-res').innerHTML = `<div class="alert alert-success">${r.casos} casos y ${r.telefonos} teléfonos cargados.
+        origen: $('#g-origen').value, prioridad: Number($('#g-prio').value || 0), semilla: $('#g-semilla').value || null, tope_fuera_marco: $('#g-tope').value === '' ? null : Number($('#g-tope').value) });
+      $('#g-res').innerHTML = `<div class="alert alert-success">${r.casos} casos y ${r.telefonos} teléfonos cargados (semilla ${r.semilla}).
         ${r.total_rechazadas ? ` ${r.total_rechazadas} líneas rechazadas.` : ''}${r.casos_con_numero_en_lista_negra ? ` ${r.casos_con_numero_en_lista_negra} casos tienen un número en la lista de no llamar.` : ''}</div>
         ${r.rechazadas.length ? `<div class="small muted">${r.rechazadas.slice(0, 20).map((/** @type {any} */ x) => `línea ${x.linea}: ${esc(x.motivo)}`).join('<br>')}</div>` : ''}`;
       setTimeout(muestra, 2500);
@@ -304,7 +307,7 @@ async function usuarios() {
     `<div class="card"><div class="card-body tight"><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Correo</th><th>Roles</th><th>Estado</th><th></th></tr></thead><tbody>
     ${lista.map((/** @type {any} */ u) => `<tr><td class="td-strong">${esc(u.nombre)}</td><td class="td-muted">${esc(u.email)}</td>
       <td>${u.roles.map((/** @type {string} */ r) => `<span class="badge ${r === 'administrador' ? 'badge-admin' : 'badge-user'}">${esc(r)}</span>`).join(' ')}</td>
-      <td><span class="badge ${u.activo ? 'badge-on' : 'badge-off'}">${u.activo ? 'activo' : 'inactivo'}</span></td>
+      <td><span class="badge ${u.activo ? 'badge-on' : 'badge-off'}">${u.activo ? 'activo' : 'inactivo'}</span>${u.opus_habilitado ? ' <span class="badge badge-warn">Opus</span>' : ''}</td>
       <td><button class="btn btn-outline btn-sm" data-u="${esc(u.uid)}">Editar</button></td></tr>`).join('')}</tbody></table></div></div></div>`;
   $('#ph-acciones').innerHTML = '<button class="btn btn-orange" id="nuevo">Nuevo usuario</button>';
   $('#nuevo').onclick = () => editarUsuario(null);
@@ -318,10 +321,13 @@ async function editarUsuario(u) {
       <div class="form-group"><label>Correo</label><input type="email" id="u-mail" value="${esc(u?.email ?? '')}" /></div>
       ${u ? '' : '<div class="form-group"><label>Clave inicial</label><input type="text" id="u-clave" /><div class="field-hint">Si el correo ya existe en Firebase, se usa esa cuenta.</div></div>'}
       <div class="form-group"><label>Roles</label><div class="seg">${roles.map((r) => `<label><input type="checkbox" value="${r}" ${u?.roles.includes(r) ? 'checked' : ''} /><span>${r}</span></label>`).join('')}</div></div>
-      <label class="check-inline"><input type="checkbox" id="u-activo" ${u?.activo === false ? '' : 'checked'} /> Activo</label>`,
+      <label class="check-inline"><input type="checkbox" id="u-activo" ${u?.activo === false ? '' : 'checked'} /> Activo</label><br>
+      <label class="check-inline mt"><input type="checkbox" id="u-opus" ${u?.opus_habilitado ? 'checked' : ''} /> Habilitar Opus en su puesto</label>
+      <div class="field-hint">Por defecto el puesto habla G.711 y Asterisk solo puentea. Opus es para conexiones domésticas que lo justifiquen: cada puesto con Opus obliga a transcodificar. Toma efecto en el próximo inicio de turno.</div>`,
   pie: '<button class="btn btn-orange" data-ok>Guardar</button>' }, (caja, cerrar) => {
     $('[data-ok]', caja).onclick = () => cerrar({ uid: u?.uid, nombre: $('#u-nom', caja).value.trim(), email: $('#u-mail', caja).value.trim(),
       clave_inicial: $('#u-clave', caja)?.value || undefined, activo: $('#u-activo', caja).checked,
+      opus_habilitado: $('#u-opus', caja).checked,
       roles: $$('.seg input', caja).filter((x) => x.checked).map((x) => x.value) });
   });
   if (!d) return;
