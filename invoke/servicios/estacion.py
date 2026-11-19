@@ -6,12 +6,12 @@ obligatorio en "termina y explica", no hay llamadas huérfanas (ADR-008).
 """
 from __future__ import annotations
 
-import random
 import uuid
 from typing import Any
 
 from .. import db
 from ..dominio.cuestionario import COMPLETA, Motor
+from ..dominio.expresiones import ErrorExpresion
 from ..enrutador import ErrorHttp, Usuario
 from . import credenciales, cuestionarios, estudios, muestra
 
@@ -187,7 +187,8 @@ def llamar(cur, u: Usuario, datos: dict) -> dict:
         db.evento(cur, "llamada_originada", estudio_id=est["id"], caso_id=caso_id, llamada_id=llamada,
                   participante_id=pid,
                   datos={"telefono_id": tel["id"], "numero": numero, "modo": est["modo_discado"], "tipo": "encuesta",
-                         "grabar": random.random() < float(est["muestreo_grabacion"])})
+                         # Encargo de cierre H2: se graban todas las llamadas de encuesta.
+                         "grabar": True})
     cur.execute("""INSERT INTO invoke.comando_telefonia (tipo, participante_id, llamada_id, datos)
                    VALUES ('originar', %s, %s, %s)""",
                 (pid, llamada, db.Jsonb({"numero": numero, "canal_participante": pe["canal_audio"]})))
@@ -212,6 +213,25 @@ def respuestas_vigentes(cur, caso_id: int) -> dict[str, Any]:
         cur, "SELECT variable, valor FROM invoke.respuesta_vigente WHERE caso_id = %s", (caso_id,))}
 
 
+def _exigir_caso_propio(cur, pid: int, caso_id: int, llamada_id: str | None = None) -> None:
+    """El caso tiene que ser del encuestador (encargo de cierre D4). También vale si la
+    llamada que se clasifica es suya: el sistema puede haber liberado el caso al
+    registrar sola una disposición mientras el encuestador clasificaba."""
+    ce = db.uno(cur, "SELECT asignado_a FROM invoke.caso_estado WHERE caso_id = %s", (caso_id,))
+    if ce and ce["asignado_a"] == pid:
+        return
+    if llamada_id and db.uno(cur, """SELECT 1 FROM invoke.evento WHERE llamada_id = %s AND caso_id = %s
+                                     AND tipo IN ('llamada_originada', 'llamada_conectada') AND participante_id = %s""",
+                             (llamada_id, caso_id, pid)):
+        return
+    raise ErrorHttp(409, "ese caso no está asignado a vos")
+
+
+def respuestas_del_caso(cur, u: Usuario, caso_id: int) -> dict[str, Any]:
+    _exigir_caso_propio(cur, _participante(cur, u), caso_id)
+    return respuestas_vigentes(cur, caso_id)
+
+
 def guardar_respuestas(cur, u: Usuario, caso_id: int, respuestas: dict[str, Any], llamada_id: str | None,
                        pantalla: dict | None = None) -> dict:
     pid = _participante(cur, u)
@@ -234,12 +254,14 @@ def guardar_respuestas(cur, u: Usuario, caso_id: int, respuestas: dict[str, Any]
 
 def iniciar_encuesta(cur, u: Usuario, caso_id: int, llamada_id: str | None) -> None:
     pid = _participante(cur, u)
+    _exigir_caso_propio(cur, pid, caso_id)
     db.evento(cur, "encuesta_iniciada", caso_id=caso_id, participante_id=pid, llamada_id=llamada_id)
 
 
 def evaluar_cuotas(cur, u: Usuario, caso_id: int, respuestas: dict) -> list[dict]:
     from . import cuotas
 
+    _exigir_caso_propio(cur, _participante(cur, u), caso_id)
     combinadas = respuestas_vigentes(cur, caso_id) | respuestas
     return cuotas.evaluar(cur, caso_id, combinadas)
 
@@ -249,6 +271,7 @@ def finalizar(cur, u: Usuario, datos: dict) -> dict:
     pid = _participante(cur, u)
     caso_id = int(datos["caso_id"])
     llamada_id = datos.get("llamada_id")
+    _exigir_caso_propio(cur, pid, caso_id, llamada_id)
     disp_tel = datos.get("disposicion_telefono")
     disp_enc = datos.get("disposicion_encuesta")
 
@@ -297,7 +320,10 @@ def _validar_completa(cur, caso_id: int) -> None:
                        JOIN invoke.cuestionario_vigente q ON q.estudio_id = c.estudio_id WHERE c.id = %s""", (caso_id,))
     if not c:
         raise ErrorHttp(409, "el estudio no tiene cuestionario publicado")
-    res = Motor(c["definicion"], c["propiedades"], caso_id).recorrer(respuestas_vigentes(cur, caso_id))
+    try:
+        res = Motor(c["definicion"], c["propiedades"], caso_id).recorrer(respuestas_vigentes(cur, caso_id))
+    except ErrorExpresion as e:
+        raise ErrorHttp(422, f"el cuestionario tiene una expresión inválida: {e}") from e
     if res["errores"]:
         pantalla, errs = next(iter(res["errores"].items()))
         raise ErrorHttp(422, f"la entrevista no está completa: {pantalla}: {'; '.join(f'{k}: {v}' for k, v in errs.items())}")

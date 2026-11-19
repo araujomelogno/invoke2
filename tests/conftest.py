@@ -104,7 +104,7 @@ class Escenario:
         self.cur.execute("""INSERT INTO invoke.cuestionario (estudio_id, version, definicion, publicado_en)
                             VALUES (%s, 1, %s, now())""", (e["id"], db.Jsonb(cuestionario or CUESTIONARIO_MINIMO)))
         self.cur.execute("UPDATE invoke.estudio SET estado = 'activo' WHERE id = %s", (e["id"],))
-        e["guia_id"] = db.uno(self.cur, "INSERT INTO invoke.guia (estudio_id, nombre) VALUES (%s, 'base') RETURNING id",
+        e["guia_id"] = db.uno(self.cur, "INSERT INTO invoke.guia (estudio_id, nombre, semilla) VALUES (%s, 'base', 7) RETURNING id",
                               (e["id"],))["id"]
         return e
 

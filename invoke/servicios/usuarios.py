@@ -8,7 +8,8 @@ ROLES = ("encuestador", "supervisor", "administrador", "investigador")
 
 
 def listar(cur) -> list[dict]:
-    return db.todos(cur, """SELECT u.*, p.id AS participante_id FROM invoke.usuario u
+    return db.todos(cur, """SELECT u.*, p.id AS participante_id, COALESCE(p.opus_habilitado, false) AS opus_habilitado
+                            FROM invoke.usuario u
                             LEFT JOIN invoke.participante p ON p.usuario_uid = u.uid ORDER BY u.nombre""")
 
 
@@ -39,6 +40,11 @@ def guardar(cur, datos: dict) -> dict:
                                         roles = EXCLUDED.roles, activo = EXCLUDED.activo
         RETURNING *""", (uid, email, nombre, roles, datos.get("activo", True)))
     if "encuestador" in roles or "supervisor" in roles:
-        cur.execute("""INSERT INTO invoke.participante (tipo, usuario_uid, nombre) VALUES ('encuestador_webrtc', %s, %s)
-                       ON CONFLICT (usuario_uid) DO UPDATE SET nombre = EXCLUDED.nombre""", (uid, nombre))
+        # H4: Opus se habilita por puesto; toma efecto en el próximo inicio de sesión
+        # (credenciales.rotar_sip reescribe ps_endpoints.allow).
+        cur.execute("""INSERT INTO invoke.participante (tipo, usuario_uid, nombre, opus_habilitado)
+                       VALUES ('encuestador_webrtc', %s, %s, %s)
+                       ON CONFLICT (usuario_uid) DO UPDATE SET nombre = EXCLUDED.nombre,
+                                                               opus_habilitado = EXCLUDED.opus_habilitado""",
+                    (uid, nombre, bool(datos.get("opus_habilitado", False))))
     return u

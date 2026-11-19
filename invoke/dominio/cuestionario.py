@@ -72,6 +72,10 @@ def validar_definicion(definicion: Mapping[str, Any]) -> list[str]:
     """Errores del documento: esquema JSON más reglas que el esquema no expresa."""
     import jsonschema
 
+    if _profundidad(definicion) > 200:
+        # Antes del esquema: jsonschema recorre recursivamente y un documento
+        # patológico agotaría la pila (encargo de cierre, M1).
+        return ["el documento está anidado de más (máximo 200 niveles)"]
     errores = [
         f"{'/'.join(str(p) for p in e.absolute_path) or '$'}: {e.message}"
         for e in jsonschema.Draft202012Validator(ESQUEMA).iter_errors(definicion)
@@ -97,6 +101,8 @@ def validar_definicion(definicion: Mapping[str, Any]) -> list[str]:
                         re.compile(q["patron"])
                     except re.error as e:
                         errores.append(f"{q['id']}: patrón inválido ({e})")
+    for ruta, expr in _expresiones(definicion):
+        errores.extend(f"{ruta}: {e}" for e in ex.validar(expr))
     for b in definicion["bloques"]:
         for p in b["pantallas"]:
             destinos = [r.get("ir_a") for r in p.get("siguiente", [])]
@@ -105,6 +111,42 @@ def validar_definicion(definicion: Mapping[str, Any]) -> list[str]:
                 if d and d not in ids_pantalla:
                     errores.append(f"{p['id']}: salto a pantalla inexistente {d}")
     return errores
+
+
+def _profundidad(doc: Any) -> int:
+    """Profundidad máxima de un documento JSON, sin recursión."""
+    maxima, pila = 0, [(doc, 1)]
+    while pila:
+        nodo, prof = pila.pop()
+        maxima = max(maxima, prof)
+        if isinstance(nodo, dict):
+            pila.extend((v, prof + 1) for v in nodo.values())
+        elif isinstance(nodo, list):
+            pila.extend((v, prof + 1) for v in nodo)
+    return maxima
+
+
+def _expresiones(definicion: Mapping[str, Any]):
+    """Todas las expresiones del cuestionario, con su ubicación."""
+    for b in definicion["bloques"]:
+        if "mostrar_si" in b:
+            yield f"{b['id']}.mostrar_si", b["mostrar_si"]
+        for p in b["pantallas"]:
+            if "mostrar_si" in p:
+                yield f"{p['id']}.mostrar_si", p["mostrar_si"]
+            for i, r in enumerate(p.get("siguiente", [])):
+                if "si" in r:
+                    yield f"{p['id']}.siguiente[{i}]", r["si"]
+            for i, v in enumerate(p.get("validaciones", [])):
+                yield f"{p['id']}.validaciones[{i}]", v["si"]
+            for q in p["preguntas"]:
+                if "mostrar_si" in q:
+                    yield f"{q['id']}.mostrar_si", q["mostrar_si"]
+                if "expresion" in q:
+                    yield f"{q['id']}.expresion", q["expresion"]
+                for o in q.get("opciones", []) + q.get("filas", []):
+                    if "mostrar_si" in o:
+                        yield f"{q['id']}.{o['codigo']}.mostrar_si", o["mostrar_si"]
 
 
 # ──────────────────────────────────── motor ────────────────────────────────────

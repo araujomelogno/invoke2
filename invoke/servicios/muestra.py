@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import io
+import secrets
 
 from .. import db
 from ..enrutador import ErrorHttp
@@ -26,7 +27,10 @@ def _telefonos(fila: dict[str, str]) -> list[str]:
 
 def cargar_guia(cur, estudio_id: int, nombre: str, contenido_csv: str, autor: str, *,
                 prioridad: int = 0, tope_fuera_marco: float | None = None,
-                origen: str = "marco", separador: str | None = None) -> dict:
+                origen: str = "marco", separador: str | None = None, semilla: int | None = None) -> dict:
+    """Carga una guía. El orden aleatorio de cada caso se deriva de (semilla, número de
+    línea) (encargo de cierre H3): la misma guía con la misma semilla da el mismo orden.
+    Sin semilla se genera una, que queda en la guía y en el evento 'muestra_cargada'."""
     if origen not in ("marco", "lista_externa"):
         raise ErrorHttp(400, "una guía cargada es del marco o una lista externa")
     if separador is None:
@@ -35,8 +39,13 @@ def cargar_guia(cur, estudio_id: int, nombre: str, contenido_csv: str, autor: st
     lector = csv.DictReader(io.StringIO(contenido_csv.lstrip("﻿")), delimiter=separador)
     if not lector.fieldnames or not any(f.lower().startswith("telefono") for f in lector.fieldnames):
         raise ErrorHttp(400, "el CSV necesita al menos una columna telefono")
-    guia = db.uno(cur, """INSERT INTO invoke.guia (estudio_id, nombre, prioridad, tope_fuera_marco)
-                          VALUES (%s, %s, %s, %s) RETURNING *""", (estudio_id, nombre, prioridad, tope_fuera_marco))
+    if semilla is None:
+        semilla = secrets.randbits(52)
+    if not 0 <= int(semilla) < 2**63:
+        raise ErrorHttp(400, "la semilla tiene que ser un entero no negativo")
+    guia = db.uno(cur, """INSERT INTO invoke.guia (estudio_id, nombre, prioridad, tope_fuera_marco, semilla)
+                          VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+                  (estudio_id, nombre, prioridad, tope_fuera_marco, int(semilla)))
     casos = telefonos = 0
     rechazadas: list[dict] = []
     for n, fila in enumerate(lector, start=2):
@@ -53,12 +62,12 @@ def cargar_guia(cur, estudio_id: int, nombre: str, contenido_csv: str, autor: st
         try:
             caso = db.uno(cur, """
                 INSERT INTO invoke.caso (estudio_id, guia_id, origen, usuario_creador, identificador, propiedades,
-                                         estrato, area, sustituto, grupo_sustituto)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                                         estrato, area, sustituto, grupo_sustituto, posicion)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
                 (estudio_id, guia["id"], origen, autor if origen == "lista_externa" else None,
                  fila.get("identificador") or None, db.Jsonb(props), fila.get("estrato") or None,
                  fila.get("area") or None, fila.get("sustituto") or None,
-                 int(fila["grupo_sustituto"]) if fila.get("grupo_sustituto") else None))
+                 int(fila["grupo_sustituto"]) if fila.get("grupo_sustituto") else None, n))
             for orden, t in enumerate(dict.fromkeys(tels), start=1):
                 cur.execute("""INSERT INTO invoke.telefono (caso_id, estudio_id, numero, orden)
                                VALUES (%s, %s, %s, %s)""", (caso["id"], estudio_id, t, orden))
@@ -73,7 +82,7 @@ def cargar_guia(cur, estudio_id: int, nombre: str, contenido_csv: str, autor: st
         JOIN invoke.caso c ON c.id = t.caso_id
         JOIN invoke.lista_negra l ON l.numero_normalizado = t.numero_normalizado
         WHERE c.guia_id = %s""", (guia["id"],))["n"]
-    resumen = {"guia_id": guia["id"], "casos": casos, "telefonos": telefonos,
+    resumen = {"guia_id": guia["id"], "semilla": int(semilla), "casos": casos, "telefonos": telefonos,
                "rechazadas": rechazadas[:200], "total_rechazadas": len(rechazadas),
                "casos_con_numero_en_lista_negra": en_lista_negra}
     db.evento(cur, "muestra_cargada", estudio_id=estudio_id, autor=autor,

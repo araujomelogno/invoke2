@@ -82,7 +82,17 @@ class Sala:
             foto = {"tipo": "sala", "puestos": supervision.sala(cur, estudio_id)}
             if estudio_id:
                 foto["discador"] = supervision.indicadores_discador(cur, estudio_id)
+                foto["reparto"] = supervision.reparto_del_dia(cur, estudio_id)
             return foto
+
+    def destinatarios(self, cambiados: set) -> dict:
+        """Encargo M4: solo se recalcula la foto de los estudios que cambiaron. Un
+        supervisor sin estudio elegido (None) ve toda la sala y se actualiza siempre."""
+        por_estudio: dict = defaultdict(list)
+        for ws, est in self.supervisores.items():
+            if est is None or est in cambiados:
+                por_estudio[est].append(ws)
+        return por_estudio
 
     async def difundir_fotos(self) -> None:
         """Como mucho una foto por segundo por estudio: la consola no necesita más."""
@@ -90,10 +100,9 @@ class Sala:
             await asyncio.sleep(1)
             if not self._pendiente_foto:
                 continue
+            cambiados = set(self._pendiente_foto)
             self._pendiente_foto.clear()
-            por_estudio: dict[int | None, list[WebSocket]] = defaultdict(list)
-            for ws, est in self.supervisores.items():
-                por_estudio[est].append(ws)
+            por_estudio = self.destinatarios(cambiados)
             for est, sockets in por_estudio.items():
                 try:
                     foto = await asyncio.to_thread(self._foto, est)

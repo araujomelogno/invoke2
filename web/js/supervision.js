@@ -48,8 +48,8 @@ function pintarSala() {
   const m = $('#main');
   if (!$('#puestos')) {
     m.innerHTML = encabezado('Sala', 'en vivo', 'Estado, caso y calidad de red de cada puesto remoto.') +
-      `<div id="discador"></div><div class="card"><div class="card-header"><span class="card-header-title">Puestos</span>
-       <span id="vivo" class="en-vivo ${S.vivo ? '' : 'off'}">en vivo</span></div><div class="card-body"><div class="puestos" id="puestos"></div></div></div>`;
+      `<div id="reparto" class="mb"></div><div id="discador"></div><div class="card"><div class="card-header"><span class="card-header-title">Puestos</span>
+       <span class="row"><span id="resumen-codec" class="small muted"></span><span id="vivo" class="en-vivo ${S.vivo ? '' : 'off'}">en vivo</span></span></div><div class="card-body"><div class="puestos" id="puestos"></div></div></div>`;
     $('#ph-acciones').innerHTML = selectorEstudio() + '<button class="btn btn-outline btn-sm" id="audio-sup">Conectar audio de escucha</button>';
     enlazarSelector(() => { $('#puestos').innerHTML = ''; });
     $('#audio-sup').onclick = conectarAudioSupervisor;
@@ -58,6 +58,10 @@ function pintarSala() {
   if (!f) return;
   const puestos = f.puestos.filter((/** @type {any} */ p) => !S.estudio || p.estudio_id === S.estudio);
   const ahora = Date.now();
+  // H4: cada puesto en Opus es transcodificación permanente en Asterisk; se ve acá, no en la CPU de la VM.
+  const enOpus = puestos.filter((/** @type {any} */ p) => p.transcodifica).length;
+  $('#resumen-codec').innerHTML = enOpus
+    ? `<span class="badge badge-warn">${enOpus} en Opus · Asterisk transcodifica</span>` : 'Todos los puestos en G.711';
   $('#puestos').innerHTML = puestos.length ? puestos.map((/** @type {any} */ p) => {
     const seg = p.segundos_en_estado + Math.floor((ahora - S.fotoEn) / 1000 || 0);
     const malP = p.perdida_pct != null && p.perdida_pct > 3, malJ = p.jitter_ms != null && p.jitter_ms > 30;
@@ -68,7 +72,8 @@ function pintarSala() {
       <div class="p-red">${p.audio_conectado ? '' : '<span class="mal">sin audio</span>'}
         <span class="${malP ? 'mal' : ''}">pérdida ${p.perdida_pct ?? '—'}%</span>
         <span class="${malJ ? 'mal' : ''}">jitter ${p.jitter_ms ?? '—'} ms</span>
-        ${p.relay ? '<span>TURN</span>' : ''}${p.codec ? `<span>${esc(p.codec)}</span>` : ''}</div>
+        ${p.relay ? '<span>TURN</span>' : ''}
+        <span class="${p.transcodifica ? 'mal' : ''}" title="${p.opus_habilitado ? 'Opus habilitado en este puesto' : 'Solo G.711'}">códec ${esc(p.codec || '—')}${p.transcodifica ? ' · transcodifica' : ''}</span></div>
       <div class="p-acciones">${p.estado === 'en_llamada'
         ? `<button class="btn btn-dark btn-sm" data-escuchar="${p.participante_id}">Escuchar</button>
            <button class="btn btn-outline btn-sm" data-susurrar="${p.participante_id}">Susurrar</button>
@@ -78,6 +83,22 @@ function pintarSala() {
   $$('[data-susurrar]').forEach((b) => { b.onclick = () => escuchar(Number(b.dataset.susurrar), true); });
   $$('[data-dejar]').forEach((b) => { b.onclick = () => api('POST', `/api/supervision/dejar-de-escuchar/${b.dataset.dejar}`, {}).catch((e) => toast(e.message, 'err')); });
   pintarDiscador(f.discador);
+  pintarReparto(f.reparto);
+}
+
+/** Reparto efectivo de frescos y reintentos del día, junto al configurado (encargo H1). @param {any} r */
+function pintarReparto(r) {
+  const caja = $('#reparto');
+  if (!caja) return;
+  if (!r) { caja.innerHTML = ''; return; }
+  const total = r.frescos + r.reintentos;
+  const efectivo = total ? (r.frescos / total) * 100 : null;
+  const conf = Number(r.configurada) * 100;
+  caja.innerHTML = `<div class="card"><div class="card-body row between">
+    <span class="small"><b>Casos nuevos del pool hoy</b> · ${r.frescos} frescos y ${r.reintentos} reintentos</span>
+    <span class="small">Efectivo <b>${efectivo === null ? '—' : efectivo.toFixed(1) + ' %'}</b> frescos · configurado ${conf.toFixed(0)} %
+      ${efectivo !== null && total >= 30 && Math.abs(efectivo - conf) > 10 ? '<span class="badge badge-warn">una población se está agotando</span>' : ''}</span>
+    </div></div>`;
 }
 
 /** @param {any} d */
@@ -163,24 +184,46 @@ async function pintarAmd() {
     <div class="stat s-warn"><div class="stat-num">${esc(cal.tasa_falsos_positivos.texto)}</div><div class="stat-label">Tasa de error del AMD</div></div>`;
   $('#tabla').innerHTML = filas.length ? `<div class="table-wrap"><table><thead><tr><th>Cuándo</th><th>Número</th><th>Grabación</th><th></th></tr></thead><tbody>
     ${filas.map((/** @type {any} */ f) => `<tr><td>${fechaHora(f.originada_en)}</td><td class="td-strong">${esc(f.numero)}</td>
-      <td class="td-muted">${esc(f.grabacion)}</td><td>${f.reclasificada ? '<span class="badge badge-err">Falso positivo</span>'
+      <td>${f.en_bucket ? `<button class="btn btn-dark btn-sm" data-oir="${f.llamada_id}">Escuchar</button>` : '<span class="badge badge-off">subiendo…</span>'}</td><td>${f.reclasificada ? '<span class="badge badge-err">Falso positivo</span>'
         : `<button class="btn btn-outline btn-sm btn-del" data-fp="${f.llamada_id}">Era una persona</button>`}</td></tr>`).join('')}</tbody></table></div>`
     : '<div class="empty-state"><span class="ei">🎙️</span>No hay llamadas de contestador grabadas para revisar.</div>';
   $$('[data-fp]').forEach((b) => { b.onclick = async () => { await api('POST', `/api/supervision/llamadas/${b.dataset.fp}/falso-positivo`, {}); pintarAmd(); }; });
+  enlazarEscucha();
 }
 
 // ───────────────────────────── fuera de marco ─────────────────────────────
+
+/** Botones «Escuchar»: URL firmada de 15 minutos sobre la grabación en el bucket. */
+function enlazarEscucha() {
+  $$('[data-oir]').forEach((b) => {
+    b.onclick = async () => {
+      try {
+        const { url } = await api('GET', `/api/supervision/llamadas/${b.dataset.oir}/grabacion`);
+        await modal({ titulo: 'Grabación', cuerpo: `<audio controls autoplay src="${esc(url)}" style="width:100%"></audio>` });
+      } catch (e) { toast(/** @type {any} */ (e).message, 'err'); }
+    };
+  });
+}
 
 async function pintarFuera() {
   $('#main').innerHTML = encabezado('Casos', 'fuera de marco', 'Quién creó casos derivados y cuántos terminaron en completa. Se marca al que se desvía del resto de la sala.') +
     '<div class="card"><div class="card-body tight" id="tabla"></div></div>';
   $('#ph-acciones').innerHTML = selectorEstudio();
   enlazarSelector(pintarFuera);
-  const filas = await api('GET', `/api/supervision/estudios/${S.estudio}/fuera-de-marco`);
+  const [filas, revision] = await Promise.all([api('GET', `/api/supervision/estudios/${S.estudio}/fuera-de-marco`),
+    api('GET', `/api/supervision/estudios/${S.estudio}/revision-fuera-de-marco`)]);
   $('#tabla').innerHTML = filas.length ? `<div class="table-wrap"><table><thead><tr><th>Encuestador</th><th>Creados</th><th>Completas</th><th></th></tr></thead><tbody>
     ${filas.map((/** @type {any} */ f) => `<tr><td class="td-strong">${esc(f.nombre)}</td><td>${f.creados}</td><td>${f.completas}</td>
       <td>${f.desviado ? '<span class="badge badge-err">Se desvía de la sala</span>' : ''}</td></tr>`).join('')}</tbody></table></div>`
     : '<div class="empty-state"><span class="ei">🔗</span>Este estudio no tiene casos fuera de marco.</div>';
+  $('#main').insertAdjacentHTML('beforeend', `<div class="card mt"><div class="card-header"><span class="card-header-title">Revisión prioritaria de grabaciones</span>
+    <span class="small muted">Completas de origen fuera de marco: se escuchan antes que el resto</span></div><div class="card-body tight">
+    ${revision.length ? `<div class="table-wrap"><table><thead><tr><th>Caso</th><th>Origen</th><th>Creado por</th><th>Completa</th><th></th></tr></thead><tbody>
+      ${revision.map((/** @type {any} */ r) => `<tr><td class="td-strong">${esc(r.identificador || r.caso_id)}</td><td><span class="badge badge-warn">${esc(r.origen)}</span></td>
+        <td>${esc(r.creado_por || '—')}</td><td>${fechaHora(r.completada_en)}</td>
+        <td>${r.en_bucket ? `<button class="btn btn-dark btn-sm" data-oir="${r.llamada_id}">Escuchar</button>` : r.grabada ? '<span class="badge badge-off">subiendo…</span>' : '<span class="badge badge-err">sin grabación</span>'}</td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty-state">No hay completas de origen fuera de marco.</div>'}</div></div>`);
+  enlazarEscucha();
 }
 
 S.fotoEn = Date.now();

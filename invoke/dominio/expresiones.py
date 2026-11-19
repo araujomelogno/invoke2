@@ -33,6 +33,9 @@ import re
 from typing import Any, Callable, Mapping
 
 MAX_NODOS = 500
+# Además del total de nodos, la profundidad: una expresión de 500 nodos anidados en
+# cadena superaría el límite de recursión de Python (encargo de cierre, M1).
+MAX_PROFUNDIDAD = 64
 # Solo decimales simples: ni "0x10" ni "1_000" ni "inf", para coincidir con JS.
 _NUMERICO = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 
@@ -94,11 +97,21 @@ def evaluar(expr: Any, respuestas: Mapping[str, Any] | None = None, ficha: Mappi
     respuestas = respuestas or {}
     ficha = ficha or {}
     contador = [0]
+    profundidad = [0]
 
     def ev(e: Any) -> Any:
+        profundidad[0] += 1
+        try:
+            return _ev(e)
+        finally:
+            profundidad[0] -= 1
+
+    def _ev(e: Any) -> Any:
         contador[0] += 1
         if contador[0] > MAX_NODOS:
             raise ErrorExpresion("expresión demasiado grande")
+        if profundidad[0] > MAX_PROFUNDIDAD:
+            raise ErrorExpresion("expresión demasiado anidada")
         if e is None or isinstance(e, (bool, int, float, str)):
             return e
         if isinstance(e, list):
@@ -274,7 +287,10 @@ def validar(expr: Any) -> list[str]:
     """Errores estructurales de una expresión, sin evaluarla."""
     errores: list[str] = []
 
-    def rec(e: Any, ruta: str) -> None:
+    def rec(e: Any, ruta: str, prof: int = 1) -> None:
+        if prof > MAX_PROFUNDIDAD:
+            errores.append(f"{ruta}: expresión demasiado anidada (máximo {MAX_PROFUNDIDAD} niveles)")
+            return
         if e is None or isinstance(e, (bool, int, float, str)):
             return
         if not isinstance(e, dict):
@@ -291,7 +307,7 @@ def validar(expr: Any) -> list[str]:
             errores.append(f"{ruta}: args debe ser lista")
             return
         for i, a in enumerate(e.get("args", [])):
-            rec(a, f"{ruta}.args[{i}]")
+            rec(a, f"{ruta}.args[{i}]", prof + 1)
 
     rec(expr, "$")
     return errores

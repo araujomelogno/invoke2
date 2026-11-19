@@ -62,3 +62,18 @@ def test_codigo_reservado_rechazado():
     mala = json.loads(json.dumps(DEF))
     mala["bloques"][0]["pantallas"][0]["preguntas"][0]["opciones"][0]["codigo"] = "1998"
     assert validar_definicion(mala)
+
+
+def test_definicion_anidada_de_mas_da_error_y_no_revienta():
+    """M1: una expresión o un documento anidado de más se rechaza con mensaje, no con un 500."""
+    profunda = True
+    for _ in range(80):
+        profunda = {"op": "not", "args": [profunda]}
+    d = json.loads(json.dumps(DEF))
+    d["bloques"][0]["pantallas"][0]["mostrar_si"] = profunda
+    assert any("anidada" in e for e in validar_definicion(d))
+    patologica = {}
+    for _ in range(5000):
+        patologica = {"op": "not", "args": [patologica]}
+    d["bloques"][0]["pantallas"][0]["mostrar_si"] = patologica
+    assert validar_definicion(d) == ["el documento está anidado de más (máximo 200 niveles)"]

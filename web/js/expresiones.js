@@ -7,6 +7,8 @@
  */
 
 const MAX_NODOS = 500;
+// Gemelo de MAX_PROFUNDIDAD en Python (encargo de cierre, M1).
+const MAX_PROFUNDIDAD = 64;
 const NUMERICO = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
 export class ErrorExpresion extends Error {}
@@ -73,6 +75,7 @@ function texto(v) {
  */
 export function evaluar(expr, respuestas = {}, ficha = {}) {
   let contador = 0;
+  let profundidad = 0;
 
   /** @param {unknown[]} args @param {number} n @param {string} op */
   const aridad = (args, n, op) => {
@@ -81,8 +84,15 @@ export function evaluar(expr, respuestas = {}, ficha = {}) {
 
   /** @param {any} e @returns {unknown} */
   const ev = (e) => {
+    profundidad += 1;
+    try { return ev1(e); } finally { profundidad -= 1; }
+  };
+
+  /** @param {any} e @returns {unknown} */
+  const ev1 = (e) => {
     contador += 1;
     if (contador > MAX_NODOS) throw new ErrorExpresion('expresión demasiado grande');
+    if (profundidad > MAX_PROFUNDIDAD) throw new ErrorExpresion('expresión demasiado anidada');
     if (e === null || e === undefined) return null;
     if (typeof e === 'boolean' || typeof e === 'number' || typeof e === 'string') return e;
     if (Array.isArray(e)) throw new ErrorExpresion('las listas solo van como argumentos de un operador');

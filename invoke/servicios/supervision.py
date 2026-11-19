@@ -18,7 +18,7 @@ UMBRAL_JITTER = 30.0    # ms
 
 def sala(cur, estudio_id: int | None = None) -> list[dict]:
     filas = db.todos(cur, """
-        SELECT p.id AS participante_id, p.nombre, p.tipo, pe.estado, pe.estudio_id, e.codigo AS estudio,
+        SELECT p.id AS participante_id, p.nombre, p.tipo, p.opus_habilitado, pe.estado, pe.estudio_id, e.codigo AS estudio,
                pe.desde, EXTRACT(epoch FROM (clock_timestamp() - pe.desde))::int AS segundos_en_estado,
                pe.caso_id, pe.llamada_id, pe.canal_audio IS NOT NULL AS audio_conectado,
                c.identificador AS caso_identificador, c.origen AS caso_origen,
@@ -33,10 +33,21 @@ def sala(cur, estudio_id: int | None = None) -> list[dict]:
         WHERE pe.estado <> 'desconectado' AND (%s::bigint IS NULL OR pe.estudio_id = %s)
         ORDER BY e.codigo, p.nombre""", (estudio_id, estudio_id))
     for f in filas:
+        # H4: un puesto que habla Opus obliga a Asterisk a transcodificar contra el trunk G.711.
+        f["transcodifica"] = bool(f["codec"] and f["codec"].lower().startswith("opus"))
         f["red_degradada"] = bool(
             (f["perdida_pct"] is not None and float(f["perdida_pct"]) > UMBRAL_PERDIDA)
             or (f["jitter_ms"] is not None and float(f["jitter_ms"]) > UMBRAL_JITTER))
     return filas
+
+
+def reparto_del_dia(cur, estudio_id: int) -> dict:
+    """Encargo de cierre H1: frescos y reintentos entregados hoy (hora del estudio),
+    junto a la proporción configurada. Puede diferir: se sortea en cada pedido."""
+    return db.uno(cur, """
+        SELECT r.* FROM invoke.estudio e,
+             invoke.reparto_frescos(e.id, date_trunc('day', clock_timestamp() AT TIME ZONE e.zona_horaria) AT TIME ZONE e.zona_horaria) r
+        WHERE e.id = %s""", (estudio_id,))
 
 
 def indicadores_discador(cur, estudio_id: int) -> dict:
@@ -135,9 +146,29 @@ def parciales(cur, estudio_id: int) -> list[dict]:
 def revision_amd(cur, estudio_id: int, limite: int = 50) -> list[dict]:
     """Muestra de llamadas clasificadas como máquina (31) con grabación, para escuchar."""
     return db.todos(cur, """
-        SELECT llamada_id, caso_id, numero, originada_en, grabacion, reclasificada
-        FROM invoke.llamada WHERE estudio_id = %s AND disp_tel_original = 31 AND grabacion IS NOT NULL
-        ORDER BY reclasificada, random() LIMIT %s""", (estudio_id, limite))
+        SELECT l.llamada_id, l.caso_id, l.numero, l.originada_en, l.grabacion, l.reclasificada,
+               b.uri IS NOT NULL AS en_bucket
+        FROM invoke.llamada l LEFT JOIN invoke.grabacion_en_bucket b ON b.llamada_id = l.llamada_id
+        WHERE l.estudio_id = %s AND l.disp_tel_original = 31 AND l.grabacion IS NOT NULL
+        ORDER BY l.reclasificada, random() LIMIT %s""", (estudio_id, limite))
+
+
+def revision_fuera_de_marco(cur, estudio_id: int) -> list[dict]:
+    """Completas de origen fuera de marco, marcadas para revisión prioritaria de su
+    grabación (política de casos fuera de marco, control 3; encargo de cierre H2).
+    Ya no es un muestreo: todas las llamadas se graban; estas se escuchan primero."""
+    return db.todos(cur, """
+        SELECT c.id AS caso_id, c.identificador, c.origen, c.caso_origen, u.nombre AS creado_por,
+               d.ocurrido_en AS completada_en, l.llamada_id, b.uri IS NOT NULL AS en_bucket,
+               l.grabacion IS NOT NULL AS grabada
+        FROM invoke.caso c
+        JOIN invoke.caso_ultima_disp_enc d ON d.caso_id = c.id AND d.codigo = 3
+        LEFT JOIN invoke.usuario u ON u.uid = c.usuario_creador
+        LEFT JOIN LATERAL (SELECT * FROM invoke.llamada x WHERE x.caso_id = c.id AND x.conectada_en IS NOT NULL
+                           ORDER BY x.originada_en DESC LIMIT 1) l ON true
+        LEFT JOIN invoke.grabacion_en_bucket b ON b.llamada_id = l.llamada_id
+        WHERE c.estudio_id = %s AND c.origen <> 'marco'
+        ORDER BY d.ocurrido_en DESC""", (estudio_id,))
 
 
 def reclasificar_amd(cur, u: Usuario, llamada_id: str) -> dict:

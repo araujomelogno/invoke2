@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from invoke import db  # noqa: E402
 from invoke.config import config  # noqa: E402
 
+from services.ari.grabaciones import BucketGcs, PbxAri, Pendiente, subir_pendientes  # noqa: E402
 from services.ari.traductor import Traductor  # noqa: E402
 
 log = logging.getLogger("invoke.ari")
@@ -58,6 +59,17 @@ class PuertoReal:
         with db.transaccion() as cur:
             r = db.uno(cur, "SELECT canal_audio FROM invoke.participante_estado WHERE participante_id = %s", (participante_id,))
         return r and r["canal_audio"]
+
+    def estado_llamada(self, llamada_id):
+        """Estado persistido de la llamada (encargo D2): la base es la fuente, no la memoria."""
+        with db.transaccion() as cur:
+            fila = db.uno(cur, """
+                SELECT l.atendida_en IS NOT NULL AS atendida, l.conectada_en IS NOT NULL AS conectada,
+                       l.participante_id, l.amd,
+                       EXISTS (SELECT 1 FROM invoke.evento a WHERE a.llamada_id = l.llamada_id
+                               AND a.tipo = 'llamada_abandonada') AS abandonada
+                FROM invoke.llamada l WHERE l.llamada_id = %s""", (llamada_id,))
+        return fila or {}
 
     def tiene_disposicion(self, llamada_id):
         with db.transaccion() as cur:
@@ -99,7 +111,7 @@ class PuertoReal:
         self._post(f"/bridges/{puente}/record", name=nombre, format="wav", ifExists="overwrite")
 
 
-def ejecutar_comando(puerto: PuertoReal, cmd: dict) -> str:
+def ejecutar_comando(puerto: PuertoReal, cmd: dict, traductor: Traductor | None = None) -> str:
     """Ejecuta un comando de la cola contra ARI. Devuelve un texto de resultado."""
     cfg = config()
     d = cmd["datos"] or {}
@@ -120,6 +132,8 @@ def ejecutar_comando(puerto: PuertoReal, cmd: dict) -> str:
         else:
             params.update({"app": cfg.ari_app, "appArgs": f"cliente,{llamada}"})
             puerto._post("/channels", **params)
+        if traductor is not None:
+            traductor.registrar_originada(llamada)
         return "originada"
     if tipo == "colgar":
         puerto.colgar(d.get("canal") or str(cmd["llamada_id"]))
@@ -161,7 +175,7 @@ def cerrar_comando(cmd_id: int, ok: bool, resultado: str) -> None:
                     ("hecho" if ok else "error", resultado[:500], cmd_id))
 
 
-async def bucle_comandos(puerto: PuertoReal) -> None:
+async def bucle_comandos(puerto: PuertoReal, traductor: Traductor) -> None:
     import psycopg
 
     cfg = config()
@@ -174,7 +188,7 @@ async def bucle_comandos(puerto: PuertoReal) -> None:
                 while True:
                     for cmd in await asyncio.to_thread(tomar_comandos):
                         try:
-                            res = await asyncio.to_thread(ejecutar_comando, puerto, cmd)
+                            res = await asyncio.to_thread(ejecutar_comando, puerto, cmd, traductor)
                             await asyncio.to_thread(cerrar_comando, cmd["id"], True, res)
                         except Exception as e:  # noqa: BLE001
                             log.exception("comando %s falló", cmd["id"])
@@ -188,6 +202,44 @@ async def bucle_comandos(puerto: PuertoReal) -> None:
         except Exception:  # noqa: BLE001
             log.exception("bucle de comandos caído; reintento en 2 s")
             await asyncio.sleep(2)
+
+
+def ciclo_grabaciones(pbx, bucket, lote: int = 20) -> dict:
+    """Un ciclo de subida (encargo H2): pendientes del log → bucket → hecho → borrado del PBX."""
+    with db.transaccion() as cur:
+        filas = db.todos(cur, """
+            SELECT g.llamada_id::text AS llamada_id, COALESCE(e.codigo, 'sin-estudio') AS estudio,
+                   COALESCE(g.archivo, 'llamada-' || g.llamada_id) AS archivo, g.ocurrido_en
+            FROM invoke.grabacion_pendiente g LEFT JOIN invoke.estudio e ON e.id = g.estudio_id
+            ORDER BY g.ocurrido_en LIMIT %s""", (lote,))
+    pendientes = [Pendiente(f["llamada_id"], f["estudio"], f["archivo"].removesuffix(".wav"), f["ocurrido_en"])
+                  for f in filas]
+
+    def registrar(p: Pendiente, datos: dict) -> None:
+        with db.transaccion() as cur:
+            db.evento(cur, "grabacion_subida", llamada_id=p.llamada_id, autor="ari",
+                      caso_id=(db.uno(cur, "SELECT caso_id FROM invoke.evento WHERE llamada_id = %s AND tipo = 'llamada_originada'",
+                                      (p.llamada_id,)) or {}).get("caso_id"), datos=datos)
+
+    return subir_pendientes(pendientes, pbx, bucket, registrar)
+
+
+async def bucle_grabaciones(puerto: PuertoReal) -> None:
+    cfg = config()
+    if not cfg.grabaciones_bucket:
+        # Sin bucket, las grabaciones se acumulan en el disco del PBX hasta llenarlo.
+        log.error("GRABACIONES_BUCKET no está configurado: las grabaciones NO se suben y el disco del PBX se llena")
+        return
+    bucket = BucketGcs(cfg.grabaciones_bucket)
+    pbx = PbxAri(puerto.http)
+    while True:
+        try:
+            r = await asyncio.to_thread(ciclo_grabaciones, pbx, bucket)
+            if any(r.values()):
+                log.info("grabaciones: %s", r)
+        except Exception:  # noqa: BLE001
+            log.exception("ciclo de grabaciones falló")
+        await asyncio.sleep(20)
 
 
 async def bucle_eventos(traductor: Traductor) -> None:
@@ -236,7 +288,7 @@ async def main() -> None:
     puerto = PuertoReal(cliente)
     traductor = Traductor(puerto)
     reconstruir_puestos(traductor)
-    await asyncio.gather(bucle_eventos(traductor), bucle_comandos(puerto), salud(int(os.environ.get("PORT", "8080"))))
+    await asyncio.gather(bucle_eventos(traductor), bucle_comandos(puerto, traductor), bucle_grabaciones(puerto), salud(int(os.environ.get("PORT", "8080"))))
 
 
 if __name__ == "__main__":

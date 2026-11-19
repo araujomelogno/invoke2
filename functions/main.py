@@ -10,8 +10,11 @@ from firebase_functions import https_fn, options
 from invoke.api import despachar
 from invoke.enrutador import Peticion
 
+# Encargo M3: la concurrencia por instancia coincide con el pool de conexiones
+# (INVOKE_DB_POOL, 10 por defecto). Más peticiones simultáneas solo esperarían una
+# conexión; así Cloud Functions abre otra instancia en lugar de encolarlas.
 options.set_global_options(region="southamerica-east1", memory=options.MemoryOption.MB_512,
-                           max_instances=10, concurrency=40, cpu=1)
+                           max_instances=10, concurrency=10, cpu=1)
 
 
 @https_fn.on_request(secrets=["DATABASE_URL", "TURN_SECRETO"], vpc_connector="invoke-vpc",

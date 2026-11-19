@@ -5,11 +5,15 @@ escritura pasa por invoke.evento o por las funciones de la base.
 """
 from __future__ import annotations
 
+import logging
+
 from . import db
 from .auth import autenticar
 from .enrutador import Enrutador, ErrorHttp, Peticion, Respuesta
-from .servicios import (cuestionarios, cuotas, estacion, estudios, exportacion, muestra, reportes,
+from .servicios import (cuestionarios, cuotas, estacion, estudios, exportacion, grabaciones, muestra, reportes,
                         supervision, usuarios)
+
+log = logging.getLogger("invoke.api")
 
 app = Enrutador()
 app.autenticar = autenticar
@@ -90,7 +94,8 @@ def guias_cargar(p):
     with db.transaccion() as cur:
         return muestra.cargar_guia(cur, p.entero("id"), d["nombre"], d["csv"], p.usuario.uid,
                                    prioridad=int(d.get("prioridad", 0)), tope_fuera_marco=d.get("tope_fuera_marco"),
-                                   origen=d.get("origen", "marco"))
+                                   origen=d.get("origen", "marco"),
+                                   semilla=int(d["semilla"]) if d.get("semilla") not in (None, "") else None)
 
 
 @app.ruta("PATCH", "/api/guias/{id}", *ADMIN)
@@ -209,6 +214,12 @@ def sup_discador(p):
         return supervision.indicadores_discador(cur, p.entero("id"))
 
 
+@app.ruta("GET", "/api/supervision/estudios/{id}/reparto", *SUPERV)
+def sup_reparto(p):
+    with db.transaccion() as cur:
+        return supervision.reparto_del_dia(cur, p.entero("id"))
+
+
 @app.ruta("POST", "/api/supervision/estudios/{id}/n", *SUPERV)
 def sup_n(p):
     d = p.json()
@@ -259,6 +270,18 @@ def sup_fp(p):
         return supervision.reclasificar_amd(cur, p.usuario, p.params["id"])
 
 
+@app.ruta("GET", "/api/supervision/llamadas/{id}/grabacion", *SUPERV)
+def sup_grabacion(p):
+    with db.transaccion() as cur:
+        return grabaciones.escuchar(cur, p.params["id"])
+
+
+@app.ruta("GET", "/api/supervision/estudios/{id}/revision-fuera-de-marco", *SUPERV)
+def sup_revision_fuera(p):
+    with db.transaccion() as cur:
+        return supervision.revision_fuera_de_marco(cur, p.entero("id"))
+
+
 @app.ruta("GET", "/api/supervision/estudios/{id}/fuera-de-marco", *SUPERV)
 def sup_fuera(p):
     with db.transaccion() as cur:
@@ -307,7 +330,7 @@ def est_caso(p):
 @app.ruta("GET", "/api/estacion/casos/{id}/respuestas", *ENC)
 def est_respuestas(p):
     with db.transaccion() as cur:
-        return estacion.respuestas_vigentes(cur, p.entero("id"))
+        return estacion.respuestas_del_caso(cur, p.usuario, p.entero("id"))
 
 
 @app.ruta("POST", "/api/estacion/casos/{id}/saltar", *ENC)
@@ -380,9 +403,19 @@ def est_prueba(p):
 
 
 def despachar(p: Peticion) -> Respuesta:
+    """Punto de entrada único. Nada se escapa sin convertirse en respuesta (encargo M2)."""
+    from psycopg_pool import PoolTimeout
+
     try:
         return app.despachar(p)
     except KeyError as e:
         return Respuesta.json({"error": f"falta el campo {e.args[0]}"}, 400)
     except ErrorHttp as e:  # pragma: no cover - el enrutador ya las atrapa
         return Respuesta.json({"error": e.mensaje}, e.estado)
+    except PoolTimeout:
+        # Encargo M3: todas las conexiones ocupadas más allá del tiempo de espera.
+        log.warning("pool de conexiones agotado: %s %s", p.metodo, p.ruta)
+        return Respuesta.json({"error": "el servidor está ocupado; reintentá en unos segundos"}, 503)
+    except Exception:  # noqa: BLE001 - lo inesperado se registra completo y se responde 500
+        log.exception("error inesperado en %s %s", p.metodo, p.ruta)
+        return Respuesta.json({"error": "error interno; quedó registrado"}, 500)

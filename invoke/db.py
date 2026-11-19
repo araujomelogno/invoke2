@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import os
 import threading
 from typing import Any, Iterator
 
@@ -37,8 +38,12 @@ def pool():
             if _pool is None:
                 from psycopg_pool import ConnectionPool
 
+                # Encargo M3: tamaño y espera explícitos. Una petición que no consigue
+                # conexión en INVOKE_DB_ESPERA_S segundos falla con PoolTimeout, que la API
+                # responde como 503, en lugar de quedar encolada sin señal.
                 _pool = ConnectionPool(
-                    config().database_url, min_size=1, max_size=5, configure=_configurar,
+                    config().database_url, min_size=1, max_size=int(os.environ.get("INVOKE_DB_POOL", "10")),
+                    timeout=float(os.environ.get("INVOKE_DB_ESPERA_S", "8")), configure=_configurar,
                     kwargs={"row_factory": dict_row}, open=True,
                 )
                 atexit.register(_pool.close)
