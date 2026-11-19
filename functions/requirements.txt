@@ -1,0 +1,8 @@
+firebase-functions==0.4.2
+firebase-admin==6.6.0
+psycopg[binary]==3.2.3
+psycopg-pool==3.2.4
+jsonschema==4.23.0
+openpyxl==3.1.5
+pandas==2.2.3
+pyreadstat==1.2.8

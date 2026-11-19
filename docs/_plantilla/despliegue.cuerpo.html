@@ -1,0 +1,222 @@
+<div class="portada"><div class="acento"></div>
+  <h1>Guía de <em>despliegue</em></h1>
+  <p>Cómo levantar INVOKE 2 en Google Cloud y Firebase, de cero a la primera llamada. Sigue el stack de <code>paneles</code> (ADR-010): Cloud SQL, Cloud Functions, Firebase Hosting y Auth, y tres servicios en Cloud Run.</p>
+  <div class="meta"><span>Región southamerica-east1</span><span>Postgres 16 · Asterisk 20 · coturn 4.6</span><span>Python 3.12</span></div>
+</div>
+
+<section id="mapa" data-indice="Mapa de componentes" data-grupo="Antes de empezar">
+<h2>Mapa de componentes</h2>
+<p class="bajada">Qué se despliega, dónde y con qué escala.</p>
+{{arquitectura}}
+<div class="tabla"><table><thead><tr><th>Componente</th><th>Dónde corre</th><th>Escala</th><th>Origen en el repo</th></tr></thead><tbody>
+<tr><td><b>Web</b> (puesto, sala, admin, editor)</td><td>Firebase Hosting</td><td>CDN</td><td><code>web/</code></td></tr>
+<tr><td><b>API administrativa</b></td><td>Cloud Functions (2.ª gen.)</td><td>0–10 instancias</td><td><code>functions/</code> + <code>invoke/</code></td></tr>
+<tr><td><b>sala</b> (WebSocket)</td><td>Cloud Run</td><td>mín. 1</td><td><code>services/sala</code></td></tr>
+<tr><td><b>ari</b> (escucha de Asterisk)</td><td>Cloud Run, interno</td><td><b>exactamente 1</b></td><td><code>services/ari</code></td></tr>
+<tr><td><b>pacer</b> (Fase 2)</td><td>Cloud Run, interno</td><td><b>exactamente 1</b></td><td><code>services/pacer</code></td></tr>
+<tr><td><b>Base</b></td><td>Cloud SQL Postgres 16, IP privada</td><td>2 vCPU / 8 GB para empezar</td><td><code>db/migrations</code></td></tr>
+<tr><td><b>PBX</b></td><td>Compute Engine (Docker)</td><td>e2-standard-2</td><td><code>infra/asterisk</code></td></tr>
+<tr><td><b>TURN</b></td><td>Compute Engine (Docker)</td><td>e2-small</td><td><code>infra/coturn</code></td></tr>
+</tbody></table></div>
+<div class="nota warn"><b>Por qué ari y pacer van con exactamente una instancia</b>Los dos son consumidores únicos: ari tiene el único WebSocket de eventos contra Asterisk y pacer es un lazo de control con temporizadores. Dos instancias originarían llamadas dos veces. Se despliegan con <code>--min-instances 1 --max-instances 1</code> y CPU siempre asignada.</div>
+</section>
+
+<section id="requisitos" data-indice="Requisitos">
+<h2>Requisitos</h2>
+<ul>
+  <li>Un proyecto de Google Cloud con facturación, asociado a un proyecto de Firebase (el mismo id).</li>
+  <li><code>gcloud</code>, <code>firebase-tools</code> 13+, Docker, Python 3.12 y Node 22 en la máquina de quien despliega.</li>
+  <li>Dos nombres DNS con IP fija: <code>pbx.&lt;dominio&gt;</code> y <code>turn.&lt;dominio&gt;</code>, con certificados TLS (Let's Encrypt). El navegador exige WSS con certificado válido.</li>
+  <li>Las credenciales del trunk SIP actual: host, usuario y clave (no se reevalúa el proveedor).</li>
+</ul>
+<pre><code>export PROYECTO=invoke-equipos
+export REGION=southamerica-east1
+gcloud config set project $PROYECTO
+gcloud services enable run.googleapis.com cloudfunctions.googleapis.com sqladmin.googleapis.com \
+  secretmanager.googleapis.com vpcaccess.googleapis.com artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com compute.googleapis.com cloudtasks.googleapis.com</code></pre>
+</section>
+
+<section id="red" data-indice="1 · Red" data-grupo="Paso a paso">
+<h2>1 · Red</h2>
+<p class="bajada">Una VPC con un conector serverless: las funciones y los servicios llegan a la base por IP privada.</p>
+<pre><code>gcloud compute networks create invoke-vpc --subnet-mode=custom
+gcloud compute networks subnets create invoke-sub --network=invoke-vpc --region=$REGION --range=10.10.0.0/24
+gcloud compute networks vpc-access connectors create invoke-vpc --region=$REGION \
+  --network=invoke-vpc --range=10.8.0.0/28
+gcloud compute addresses create pbx-ip turn-ip --region=$REGION
+
+# PBX: SIP del trunk, WSS de los navegadores y RTP
+gcloud compute firewall-rules create invoke-pbx --network=invoke-vpc --target-tags=pbx \
+  --allow=udp:5060,tcp:8089,udp:10000-20000
+# TURN: señalización y rango de relay
+gcloud compute firewall-rules create invoke-turn --network=invoke-vpc --target-tags=turn \
+  --allow=udp:3478,tcp:3478,tcp:5349,udp:49152-65535
+# ARI (8088) solo desde la VPC: lo usa el servicio ari a través del conector
+gcloud compute firewall-rules create invoke-ari --network=invoke-vpc --target-tags=pbx \
+  --source-ranges=10.8.0.0/28 --allow=tcp:8088</code></pre>
+<div class="nota info"><b>Restringí el SIP al trunk</b>En producción, limitá <code>udp:5060</code> con <code>--source-ranges</code> a las IP del proveedor del trunk.</div>
+</section>
+
+<section id="base" data-indice="2 · Base de datos">
+<h2>2 · Base de datos</h2>
+<pre><code>gcloud sql instances create invoke --database-version=POSTGRES_16 --region=$REGION \
+  --tier=db-custom-2-8192 --network=invoke-vpc --no-assign-ip \
+  --backup --enable-point-in-time-recovery
+gcloud sql databases create invoke --instance=invoke
+gcloud sql users set-password postgres --instance=invoke --prompt-for-password</code></pre>
+<p>Las migraciones se aplican desde una máquina con acceso a la IP privada, ya sea la VM del PBX o el Cloud SQL Auth Proxy:</p>
+<pre><code>pip install -r requirements.txt
+export DATABASE_URL="postgresql://postgres:CLAVE@IP_PRIVADA:5432/invoke"
+python scripts/migrar.py --verificar        # aplica en orden y verifica accesos</code></pre>
+<p>Después se crean los usuarios con login, una sola vez, con claves generadas y guardadas en Secret Manager:</p>
+<pre><code>psql "$DATABASE_URL" -v clave_api="'$(openssl rand -base64 24)'" \
+  -v clave_ast="'...'" -v clave_tab="'...'" -f db/roles_produccion.sql</code></pre>
+<div class="tabla"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Lo usa</th></tr></thead><tbody>
+<tr><td><code>invoke_api</code></td><td><code>invoke_app</code></td><td>Functions y los tres servicios de Cloud Run</td></tr>
+<tr><td><code>asterisk_rt_login</code></td><td><code>asterisk_rt</code></td><td>Asterisk realtime: solo lee los endpoints de los puestos</td></tr>
+<tr><td><code>invoke_tablero</code></td><td><code>invoke_lectura</code></td><td>Script del tablero de productividad (vista <code>cdr_compat</code>)</td></tr>
+</tbody></table></div>
+<div class="nota err"><b>Nunca con el usuario postgres</b>La aplicación se conecta siempre como <code>invoke_api</code>. Las invariantes dependen de que <code>invoke_app</code> no pueda escribir proyecciones ni modificar hechos, y el verificador de accesos lo controla en cada migración.</div>
+</section>
+
+<section id="secretos" data-indice="3 · Secretos">
+<h2>3 · Secretos</h2>
+<p class="bajada">Ningún secreto vive en el repositorio (CLAUDE.md, regla 11).</p>
+<pre><code>printf 'postgresql://invoke_api:CLAVE@IP_PRIVADA:5432/invoke' | gcloud secrets create DATABASE_URL --data-file=-
+openssl rand -base64 32 | tr -d '\n' | gcloud secrets create TURN_SECRETO --data-file=-
+openssl rand -base64 24 | tr -d '\n' | gcloud secrets create ARI_CLAVE --data-file=-
+printf 'CLAVE_TRUNK' | gcloud secrets create TRUNK_CLAVE --data-file=-
+printf 'CLAVE_ASTERISK_RT' | gcloud secrets create DB_CLAVE_ASTERISK --data-file=-</code></pre>
+<p>Dale <code>roles/secretmanager.secretAccessor</code> a la cuenta de servicio de Functions, de Cloud Run y de las VM.</p>
+</section>
+
+<section id="pbx" data-indice="4 · PBX Asterisk">
+<h2>4 · PBX Asterisk</h2>
+<p class="bajada">Una VM con Docker. Los <code>.conf</code> de <code>infra/asterisk</code> son plantillas que el contenedor completa con variables de entorno.</p>
+<pre><code>gcloud compute instances create pbx --zone=${REGION}-a --machine-type=e2-standard-2 \
+  --network-interface=subnet=invoke-sub,address=pbx-ip --tags=pbx \
+  --image-family=cos-stable --image-project=cos-cloud</code></pre>
+<p>En la VM, con el repositorio clonado y los certificados en <code>/etc/asterisk/keys/pbx.crt</code> y <code>pbx.key</code>:</p>
+<pre><code>docker build -t invoke-pbx infra/asterisk
+docker run -d --name pbx --network host --restart always \
+  -v /etc/asterisk/keys:/etc/asterisk/keys:ro \
+  -e PBX_IP_PUBLICA=... -e TRUNK_HOST=... -e TRUNK_DOMINIO=... -e TRUNK_USUARIO=... \
+  -e TRUNK_CLAVE="$(gcloud secrets versions access latest --secret=TRUNK_CLAVE)" \
+  -e ARI_CLAVE="$(gcloud secrets versions access latest --secret=ARI_CLAVE)" \
+  -e DB_HOST=IP_PRIVADA_SQL -e DB_CLAVE_ASTERISK="$(gcloud secrets versions access latest --secret=DB_CLAVE_ASTERISK)" \
+  -e STUN_HOST=turn.&lt;dominio&gt; invoke-pbx</code></pre>
+<ul>
+  <li>Copiá el audio <code>invoke-disculpas.wav</code> a <code>/var/lib/asterisk/sounds/es/</code> (ver <code>infra/asterisk/sounds/LEEME.txt</code>).</li>
+  <li>Comprobá el trunk con <code>docker exec pbx asterisk -rx "pjsip show registrations"</code> y ARI con <code>curl -u invoke:CLAVE http://IP_PRIVADA:8088/ari/asterisk/info</code>.</li>
+  <li>AMI está deshabilitado a propósito (ADR-003).</li>
+</ul>
+</section>
+
+<section id="turn" data-indice="5 · TURN">
+<h2>5 · TURN (coturn)</h2>
+<pre><code>gcloud compute instances create turn --zone=${REGION}-a --machine-type=e2-small \
+  --network-interface=subnet=invoke-sub,address=turn-ip --tags=turn \
+  --image-family=cos-stable --image-project=cos-cloud
+# en la VM:
+docker run -d --name turn --network host --restart always \
+  -v $PWD/turnserver.conf:/etc/coturn/turnserver.conf:ro -v /etc/coturn/certs:/etc/coturn/certs:ro \
+  coturn/coturn:4.6 -c /etc/coturn/turnserver.conf</code></pre>
+<p>Antes de copiar <code>infra/coturn/turnserver.conf</code>, reemplazá <code>${TURN_SECRETO}</code> y <code>${PBX_IP_PUBLICA}</code> (con <code>envsubst</code>). El relay solo acepta como destino al PBX.</p>
+</section>
+
+<section id="cloudrun" data-indice="6 · Cloud Run">
+<h2>6 · Servicios de Cloud Run</h2>
+<pre><code>gcloud artifacts repositories create invoke --repository-format=docker --location=$REGION
+gcloud auth configure-docker $REGION-docker.pkg.dev
+for s in ari sala pacer; do
+  docker build -t $REGION-docker.pkg.dev/$PROYECTO/invoke/$s -f infra/cloudrun/Dockerfile.$s .
+  docker push $REGION-docker.pkg.dev/$PROYECTO/invoke/$s
+done
+
+COMUN="--region=$REGION --vpc-connector=invoke-vpc --vpc-egress=private-ranges-only \
+  --set-secrets=DATABASE_URL=DATABASE_URL:latest"
+
+gcloud run deploy ari --image=$REGION-docker.pkg.dev/$PROYECTO/invoke/ari $COMUN \
+  --min-instances=1 --max-instances=1 --no-cpu-throttling --ingress=internal --no-allow-unauthenticated \
+  --set-secrets=ARI_CLAVE=ARI_CLAVE:latest \
+  --set-env-vars=ARI_URL=http://IP_PRIVADA_PBX:8088/ari,INVOKE_TRUNK='PJSIP/{numero}@trunk'
+
+gcloud run deploy pacer --image=$REGION-docker.pkg.dev/$PROYECTO/invoke/pacer $COMUN \
+  --min-instances=1 --max-instances=1 --no-cpu-throttling --ingress=internal --no-allow-unauthenticated
+
+gcloud run deploy sala --image=$REGION-docker.pkg.dev/$PROYECTO/invoke/sala $COMUN \
+  --min-instances=1 --max-instances=3 --timeout=3600 --session-affinity --allow-unauthenticated \
+  --set-env-vars=FIREBASE_PROJECT=$PROYECTO</code></pre>
+<div class="nota info"><b>La sala es pública pero autenticada</b>El primer mensaje de cada WebSocket trae el token de Firebase, que se verifica antes de suscribir. Sin token válido, la sala cierra la conexión con el código 4401.</div>
+</section>
+
+<section id="firebase" data-indice="7 · Firebase">
+<h2>7 · Firebase: Auth, Functions y Hosting</h2>
+<ol class="pasos">
+  <li><b>Auth.</b> En la consola de Firebase, habilitá el proveedor «Correo y contraseña» y agregá el dominio de Hosting a los dominios autorizados.</li>
+  <li><b>Configuración de la web.</b> Editá <code>web/js/config.js</code> con la configuración web del proyecto (no es secreta) y con <code>salaWs: 'wss://&lt;url-de-sala&gt;/sala'</code>.</li>
+  <li><b>Functions.</b> En <code>functions/main.py</code> ya están la región, el conector VPC y los secretos que usa. El predeploy copia <code>invoke/</code> y <code>schemas/</code> adentro de <code>functions/</code>.
+<pre><code>echo '{"projects":{"default":"'$PROYECTO'"}}' &gt; .firebaserc
+firebase deploy --only functions:invoke</code></pre></li>
+  <li><b>Variables de la función.</b> Creá <code>functions/.env.&lt;proyecto&gt;</code> con <code>SIP_WSS=wss://pbx.&lt;dominio&gt;:8089/ws</code>, <code>SIP_DOMINIO=pbx.&lt;dominio&gt;</code>, <code>TURN_URLS=turn:turn.&lt;dominio&gt;:3478?transport=udp,turns:turn.&lt;dominio&gt;:5349?transport=tcp</code> y <code>STUN_URLS=stun:turn.&lt;dominio&gt;:3478</code>. <code>INVOKE_AUTH_DEV</code> no se define nunca.</li>
+  <li><b>Hosting.</b>
+<pre><code>firebase deploy --only hosting</code></pre>
+  Hosting reescribe <code>/api/**</code> a la función <code>api</code> (ver <code>firebase.json</code>).</li>
+</ol>
+</section>
+
+<section id="primer-usuario" data-indice="8 · Primer administrador">
+<h2>8 · Primer administrador</h2>
+<p>Creá la cuenta en Firebase Auth (consola o CLI) y dala de alta en la base con su <code>uid</code>. Desde ahí, los demás usuarios se crean desde <b>Administración → Usuarios</b>.</p>
+<pre><code>INSERT INTO invoke.usuario (uid, email, nombre, roles)
+VALUES ('UID_DE_FIREBASE', 'coordinacion@equipos.com.uy', 'Coordinación', ARRAY['administrador','investigador','supervisor']);</code></pre>
+</section>
+
+<section id="verificacion" data-indice="9 · Verificación">
+<h2>9 · Verificación después de desplegar</h2>
+<ol class="pasos">
+  <li><code>GET https://&lt;hosting&gt;/api/salud</code> responde <code>{"ok": true}</code>.</li>
+  <li>Entrar como administrador, crear un estudio de prueba marcado como <b>prueba o capacitación</b>, publicar el cuestionario de ejemplo (<code>schemas/ejemplos/satisfaccion_clientes.json</code>, desde «Importar JSON» del editor) y cargar una guía con un número propio.</li>
+  <li>Entrar como encuestador: hacer la prueba de audio y verificar que la barra superior pase a <span class="badge b-ok">Audio OK</span>.</li>
+  <li>Pedir el caso, llamar al número propio, atender y comprobar audio en las dos direcciones.</li>
+  <li>Desde la consola de supervisión: conectar el audio de escucha y escuchar la llamada. La calidad de red del puesto tiene que aparecer en la tarjeta.</li>
+  <li>Clasificar, abrir <b>Reportes</b> y ver el intento. El estudio de prueba no da ficha técnica, porque no es un estudio.</li>
+  <li>Revisar los logs de <code>ari</code>: tiene que figurar «conectado a ARI» y ningún comando en error (<code>SELECT * FROM invoke.comando_telefonia WHERE estado = 'error'</code>).</li>
+</ol>
+</section>
+
+<section id="operacion" data-indice="Actualizar y operar" data-grupo="Operación">
+<h2>Actualizar y operar</h2>
+<h3>Orden de una actualización</h3>
+<ol class="pasos">
+  <li><b>Migraciones</b> con <code>scripts/migrar.py --verificar</code>. Son aditivas: el código viejo tiene que seguir funcionando con el esquema nuevo.</li>
+  <li><b>Functions</b> (<code>firebase deploy --only functions:invoke</code>).</li>
+  <li><b>Cloud Run</b>: <code>sala</code>, después <code>pacer</code> y por último <code>ari</code>, fuera del horario de campo. Al reiniciar, <code>ari</code> recupera los puestos desde la base y los navegadores reconectan solos.</li>
+  <li><b>Hosting</b>.</li>
+</ol>
+<h3>Copias y recuperación</h3>
+<p>Cloud SQL con backup diario y recuperación a un punto en el tiempo. Como el log de eventos es inmutable, una recuperación a un instante reproduce exactamente los reportes de ese instante.</p>
+<h3>Rotación de secretos</h3>
+<p>Para rotar <code>TURN_SECRETO</code> o <code>ARI_CLAVE</code>, se crea una versión nueva y se redespliega el consumidor (coturn y Functions, o PBX y ari). Las credenciales SIP de los puestos se rotan solas en cada inicio de sesión.</p>
+<h3>Qué mirar en el día a día</h3>
+<div class="grid">
+  <div class="tile"><div class="t">Comandos en error</div><p><code>invoke.comando_telefonia</code> con <code>estado = 'error'</code>. Si suben, revisar el trunk o ARI.</p></div>
+  <div class="tile"><div class="t">Proporción por TURN</div><p><code>avg(relay::int)</code> sobre <code>invoke.calidad_red</code> del día. Es el insumo de ADR-005.</p></div>
+  <div class="tile"><div class="t">Abandono real</div><p>Consola → indicadores del discador. Por encima del objetivo, bajar N.</p></div>
+  <div class="tile"><div class="t">Proyección íntegra</div><p>Tras un incidente, <code>SELECT invoke.reconstruir_caso_estado(id)</code> sobre los casos afectados, como dueño de la base.</p></div>
+</div>
+</section>
+
+<section id="local" data-indice="Desarrollo local">
+<h2>Desarrollo local</h2>
+<pre><code>pip install -r requirements-dev.txt
+docker compose up -d postgres
+export DATABASE_URL=postgresql://postgres:invoke@127.0.0.1:5432/invoke
+python scripts/migrar.py --verificar
+python scripts/semilla_demo.py
+INVOKE_AUTH_DEV=1 python scripts/servidor_local.py   # http://127.0.0.1:8000/?dev_uid=dev-admin</code></pre>
+<p>Usuarios de la semilla: <code>dev-admin</code>, <code>dev-sup</code>, <code>dev-enc1</code>, <code>dev-enc2</code> y <code>dev-enc3</code>. Sin Asterisk funciona todo salvo el audio, y el puesto lo avisa. Para el entorno completo (PBX, TURN y servicios) está <code>docker compose up</code> con un <code>.env</code> armado a partir de <code>.env.ejemplo</code>.</p>
+<h3>Integración continua</h3>
+<p><code>.github/workflows/ci.yml</code> corre en cada push: pytest contra un Postgres real (invariantes, fórmulas, API, exportación y verificador de accesos), las baterías JS compartidas con Python y <code>tsc</code> sobre el frontend.</p>
+</section>

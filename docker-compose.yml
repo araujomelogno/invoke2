@@ -1,0 +1,27 @@
+# Entorno local completo: Postgres, Asterisk, coturn y los servicios. Para probar
+# solo la web y la API alcanza con Postgres + scripts/servidor_local.py.
+#   docker compose up -d postgres && python scripts/migrar.py && python scripts/semilla_demo.py
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_PASSWORD: invoke, POSTGRES_DB: invoke }
+    ports: ["5432:5432"]
+  asterisk:
+    build: infra/asterisk
+    network_mode: host
+    env_file: .env
+  coturn:
+    image: coturn/coturn:4.6
+    network_mode: host
+    volumes: ["./infra/coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro"]
+  ari:
+    build: { context: ., dockerfile: infra/cloudrun/Dockerfile.ari }
+    env_file: .env
+    network_mode: host
+  sala:
+    build: { context: ., dockerfile: infra/cloudrun/Dockerfile.sala }
+    env_file: .env
+    ports: ["8080:8080"]
+  pacer:
+    build: { context: ., dockerfile: infra/cloudrun/Dockerfile.pacer }
+    env_file: .env

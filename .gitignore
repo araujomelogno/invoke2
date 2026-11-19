@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.env
+.env.*
+!.env.ejemplo
+functions/invoke/
+functions/schemas/
+functions/venv/
+.firebase/
+.firebaserc
+*.sav
+node_modules/
+.DS_Store

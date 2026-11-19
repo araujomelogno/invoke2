@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Equipos Consultores — INVOKE 2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/equipos.css" />
+  <script src="/js/config.js"></script>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-brand">
+      <div class="login-brand-inner">
+        <div class="login-brand-logo"><img src="/img/logo-vertical-blanco.png" alt="Equipos Consultores" /></div>
+        <div class="tagline">Campo telefónico <em>INVOKE 2</em></div>
+        <div class="tagline-sub">Puesto del encuestador, supervisión en vivo y administración de estudios, desde el navegador.</div>
+      </div>
+    </div>
+    <div class="login-form-panel">
+      <div class="login-form-inner">
+        <div class="accent-bar"></div>
+        <h1>Ingresar</h1>
+        <p class="login-sub">Usá la cuenta que te dio la coordinación de campo.</p>
+        <div id="alerta"></div>
+        <form id="form">
+          <div class="form-group"><label for="email">Correo</label><input type="email" id="email" autocomplete="username" required /></div>
+          <div class="form-group"><label for="clave">Contraseña</label><input type="password" id="clave" autocomplete="current-password" required /></div>
+          <button class="btn btn-orange btn-full" id="entrar" type="submit">Entrar</button>
+        </form>
+        <div class="login-forgot"><a id="olvido">Olvidé mi contraseña</a></div>
+        <p class="field-hint" style="margin-top:2rem; text-align:center;">Necesitás un auricular USB y una conexión estable. Antes de cada turno el puesto hace una prueba de audio.</p>
+      </div>
+    </div>
+  </div>
+  <div id="toast-wrap"></div>
+  <script type="module">
+    import { $, esc, iniciarSesion, entrar, pantallaDe, sesion, toast } from '/js/comun.js';
+    const alerta = (m, t = 'error') => { $('#alerta').innerHTML = `<div class="alert alert-${t}">${esc(m)}</div>`; };
+    const cfg = window.INVOKE_CONFIG;
+    const dev = new URLSearchParams(location.search).get('dev_uid');
+    if (!dev && cfg.firebase.apiKey === 'TU_API_KEY') {
+      alerta('Falta configurar Firebase en /js/config.js (ver docs/despliegue.html).', 'warn');
+    }
+    const yo = await iniciarSesion().catch(() => null);
+    if (yo) location.href = pantallaDe(yo);
+    else if (sesion.usuario) alerta('Tu cuenta existe pero no está habilitada en INVOKE 2. Pedí el alta a la coordinación.');
+    $('#form').onsubmit = async (e) => {
+      e.preventDefault();
+      $('#entrar').disabled = true;
+      try {
+        const u = await entrar($('#email').value.trim(), $('#clave').value);
+        if (!u) throw new Error('sin alta');
+        location.href = pantallaDe(u);
+      } catch (err) {
+        alerta(err.estado === 403 ? 'Tu cuenta no está habilitada en INVOKE 2.' : 'Correo o contraseña incorrectos.');
+        $('#entrar').disabled = false;
+      }
+    };
+    $('#olvido').onclick = async () => {
+      const email = $('#email').value.trim();
+      if (!email) return alerta('Escribí tu correo y volvé a tocar «Olvidé mi contraseña».', 'info');
+      try { await sesion.auth.sendPasswordResetEmail(sesion.auth.instancia, email); toast('Te enviamos un correo para restablecerla.', 'ok'); }
+      catch { alerta('No se pudo enviar el correo.'); }
+    };
+  </script>
+</body>
+</html>

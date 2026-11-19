@@ -1,0 +1,17 @@
+{
+  "//": "Chequeo de tipos del frontend sin paso de build (PRD, 'Frontend y expresiones'): tsc --noEmit -p . en CI.",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true
+  },
+  "include": ["web/js/**/*.js", "web/tipos.d.ts"],
+  "exclude": ["web/vendor"]
+}

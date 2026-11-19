@@ -1,0 +1,243 @@
+"""Escucha de ARI (Cloud Run, mínimo de instancias = 1, máximo = 1).
+
+Consumidor único (ADR-010): mantiene el WebSocket de eventos contra Asterisk,
+traduce cada evento a hechos en Postgres (traductor.py) y ejecuta la cola de
+comandos de telefonía (invoke.comando_telefonia) que escriben la API y el pacer.
+
+Variables: DATABASE_URL, ARI_URL, ARI_USUARIO, ARI_CLAVE, ARI_APP, INVOKE_TRUNK,
+INVOKE_CALLER_ID. Expone /salud en PORT para el health check de Cloud Run.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import sys
+import urllib.parse
+
+import httpx
+import websockets
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from invoke import db  # noqa: E402
+from invoke.config import config  # noqa: E402
+
+from services.ari.traductor import Traductor  # noqa: E402
+
+log = logging.getLogger("invoke.ari")
+
+
+class PuertoReal:
+    """Implementación del puerto del traductor contra Postgres y ARI REST."""
+
+    def __init__(self, cliente: httpx.Client):
+        self.http = cliente
+        self.puentes: dict[int, str] = {}
+
+    # ── base ──
+    def evento(self, tipo, **campos):
+        with db.transaccion() as cur:
+            db.evento(cur, tipo, **campos)
+
+    def llamada(self, llamada_id):
+        with db.transaccion() as cur:
+            o = db.uno(cur, """SELECT caso_id, participante_id, estudio_id, datos FROM invoke.evento
+                               WHERE llamada_id = %s AND tipo = 'llamada_originada' LIMIT 1""", (llamada_id,))
+        if not o:
+            return None
+        return {"caso_id": o["caso_id"], "participante_id": o["participante_id"], "estudio_id": o["estudio_id"],
+                "grabar": o["datos"].get("grabar"), "tipo": o["datos"].get("tipo")}
+
+    def tomar_participante(self, llamada_id):
+        with db.transaccion() as cur:
+            return db.uno(cur, "SELECT invoke.tomar_participante_para(%s) AS p", (llamada_id,))["p"]
+
+    def canal_de(self, participante_id):
+        with db.transaccion() as cur:
+            r = db.uno(cur, "SELECT canal_audio FROM invoke.participante_estado WHERE participante_id = %s", (participante_id,))
+        return r and r["canal_audio"]
+
+    def tiene_disposicion(self, llamada_id):
+        with db.transaccion() as cur:
+            # Una llamada descartada por el pacer tampoco lleva disposición: no fue un intento.
+            return db.uno(cur, "SELECT 1 FROM invoke.evento WHERE llamada_id = %s AND tipo IN ('disposicion_telefono', 'llamada_descartada') LIMIT 1",
+                          (llamada_id,)) is not None
+
+    # ── ARI ──
+    def _post(self, ruta, **params):
+        r = self.http.post(ruta, params=params)
+        r.raise_for_status()
+        return r.json() if r.content else None
+
+    def responder(self, canal):
+        self._post(f"/channels/{canal}/answer")
+
+    def puente_de(self, participante_id):
+        if participante_id not in self.puentes:
+            bid = f"puesto-{participante_id}"
+            self._post(f"/bridges/{bid}", type="mixing", name=bid)
+            self.puentes[participante_id] = bid
+        return self.puentes[participante_id]
+
+    def agregar_a_puente(self, puente, canal):
+        self._post(f"/bridges/{puente}/addChannel", channel=canal)
+
+    def colgar(self, canal):
+        r = self.http.delete(f"/channels/{canal}")
+        if r.status_code not in (204, 404):
+            r.raise_for_status()
+
+    def reproducir(self, canal, sonido):
+        try:
+            self._post(f"/channels/{canal}/play", media=f"sound:{sonido}")
+        except httpx.HTTPError:
+            log.warning("no se pudo reproducir %s en %s", sonido, canal)
+
+    def grabar(self, puente, nombre):
+        self._post(f"/bridges/{puente}/record", name=nombre, format="wav", ifExists="overwrite")
+
+
+def ejecutar_comando(puerto: PuertoReal, cmd: dict) -> str:
+    """Ejecuta un comando de la cola contra ARI. Devuelve un texto de resultado."""
+    cfg = config()
+    d = cmd["datos"] or {}
+    tipo = cmd["tipo"]
+    if tipo == "originar":
+        llamada = str(cmd["llamada_id"])
+        endpoint = cfg.trunk.format(numero=d["numero"])
+        params = {"endpoint": endpoint, "channelId": llamada, "timeout": d.get("timeout", 30)}
+        if cfg.caller_id:
+            params["callerId"] = cfg.caller_id
+        if d.get("amd"):
+            # Power/predictivo: pasa por AMD() en el dialplan y entra a Stasis con el resultado.
+            params.update({"context": "invoke-amd", "extension": "s", "priority": 1,
+                           "variables": None})
+            r = puerto.http.post("/channels", params={k: v for k, v in params.items() if v is not None},
+                                 json={"variables": {"LLAMADA": llamada}})
+            r.raise_for_status()
+        else:
+            params.update({"app": cfg.ari_app, "appArgs": f"cliente,{llamada}"})
+            puerto._post("/channels", **params)
+        return "originada"
+    if tipo == "colgar":
+        puerto.colgar(d.get("canal") or str(cmd["llamada_id"]))
+        return "colgada"
+    if tipo == "mudo":
+        canal = puerto.canal_de(cmd["participante_id"])
+        accion = puerto.http.post if d.get("activar", True) else puerto.http.delete
+        accion(f"/channels/{canal}/mute", params={"direction": "in"}).raise_for_status()
+        return "mudo" if d.get("activar", True) else "con audio"
+    if tipo == "dtmf":
+        puerto._post(f"/channels/{cmd['llamada_id']}/dtmf", dtmf=d["digitos"])
+        return "dtmf enviado"
+    if tipo == "escuchar":
+        # Snoop sobre la pata del encuestador (oye a las dos partes); el canal snoop
+        # entra a Stasis y el traductor lo suma al puente del supervisor.
+        canal_enc = puerto.canal_de(cmd["participante_id"])
+        puerto._post(f"/channels/{canal_enc}/snoop", spy="both", whisper="out" if d.get("susurro") else "none",
+                     app=cfg.ari_app, appArgs=f"snoop,{d['supervisor_participante']}",
+                     snoopId=f"snoop-{cmd['participante_id']}")
+        return "escuchando"
+    if tipo == "dejar_escuchar":
+        puerto.colgar(f"snoop-{cmd['participante_id']}")
+        return "escucha terminada"
+    raise ValueError(f"comando no soportado: {tipo}")
+
+
+def tomar_comandos() -> list[dict]:
+    with db.transaccion() as cur:
+        return db.todos(cur, """
+            UPDATE invoke.comando_telefonia SET estado = 'tomado', tomado_en = clock_timestamp()
+            WHERE id IN (SELECT id FROM invoke.comando_telefonia WHERE estado = 'pendiente'
+                         ORDER BY id LIMIT 20 FOR UPDATE SKIP LOCKED)
+            RETURNING *""")
+
+
+def cerrar_comando(cmd_id: int, ok: bool, resultado: str) -> None:
+    with db.transaccion() as cur:
+        cur.execute("UPDATE invoke.comando_telefonia SET estado = %s, resultado = %s WHERE id = %s",
+                    ("hecho" if ok else "error", resultado[:500], cmd_id))
+
+
+async def bucle_comandos(puerto: PuertoReal) -> None:
+    import psycopg
+
+    cfg = config()
+    while True:
+        try:
+            async with await psycopg.AsyncConnection.connect(cfg.database_url, autocommit=True) as conn:
+                if cfg.rol_db:
+                    await conn.execute(f'SET ROLE "{cfg.rol_db}"')
+                await conn.execute("LISTEN invoke_comandos")
+                while True:
+                    for cmd in await asyncio.to_thread(tomar_comandos):
+                        try:
+                            res = await asyncio.to_thread(ejecutar_comando, puerto, cmd)
+                            await asyncio.to_thread(cerrar_comando, cmd["id"], True, res)
+                        except Exception as e:  # noqa: BLE001
+                            log.exception("comando %s falló", cmd["id"])
+                            await asyncio.to_thread(cerrar_comando, cmd["id"], False, str(e))
+                    try:
+                        async with asyncio.timeout(2):
+                            async for _ in conn.notifies():
+                                break
+                    except TimeoutError:
+                        pass
+        except Exception:  # noqa: BLE001
+            log.exception("bucle de comandos caído; reintento en 2 s")
+            await asyncio.sleep(2)
+
+
+async def bucle_eventos(traductor: Traductor) -> None:
+    cfg = config()
+    base = cfg.ari_url.replace("http", "ws", 1).rstrip("/")
+    q = urllib.parse.urlencode({"app": cfg.ari_app, "api_key": f"{cfg.ari_usuario}:{cfg.ari_clave}"})
+    url = f"{base}/events?{q}"
+    while True:
+        try:
+            async with websockets.connect(url, ping_interval=20) as ws:
+                log.info("conectado a ARI")
+                async for mensaje in ws:
+                    ev = json.loads(mensaje)
+                    try:
+                        await asyncio.to_thread(traductor.manejar, ev)
+                    except Exception:  # noqa: BLE001
+                        log.exception("evento ARI no procesado: %s", ev.get("type"))
+        except Exception:  # noqa: BLE001
+            log.exception("WebSocket ARI caído; reintento en 2 s")
+            await asyncio.sleep(2)
+
+
+async def salud(puerto_http: int) -> None:
+    async def atender(reader, writer):
+        await reader.read(1024)
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+        await writer.drain()
+        writer.close()
+
+    servidor = await asyncio.start_server(atender, "0.0.0.0", puerto_http)
+    async with servidor:
+        await servidor.serve_forever()
+
+
+def reconstruir_puestos(traductor: Traductor) -> None:
+    """Al reiniciar, recupera qué canal es de qué puesto desde la base (no desde Asterisk)."""
+    with db.transaccion() as cur:
+        for r in db.todos(cur, "SELECT participante_id, canal_audio FROM invoke.participante_estado WHERE canal_audio IS NOT NULL"):
+            traductor.puestos[r["canal_audio"]] = r["participante_id"]
+
+
+async def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    cfg = config()
+    cliente = httpx.Client(base_url=cfg.ari_url, auth=(cfg.ari_usuario, cfg.ari_clave), timeout=5)
+    puerto = PuertoReal(cliente)
+    traductor = Traductor(puerto)
+    reconstruir_puestos(traductor)
+    await asyncio.gather(bucle_eventos(traductor), bucle_comandos(puerto), salud(int(os.environ.get("PORT", "8080"))))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

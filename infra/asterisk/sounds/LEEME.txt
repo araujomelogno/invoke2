@@ -1,0 +1,3 @@
+invoke-disculpas.wav — mensaje breve que se reproduce cuando el sistema abandona una
+llamada en power/predictivo ("Disculpe, le volveremos a llamar"). Grabarlo en 8 kHz
+mono y copiarlo a /var/lib/asterisk/sounds/es/ del PBX. No se versiona el audio.

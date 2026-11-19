@@ -1,0 +1,81 @@
+{
+  "formato": 1,
+  "id": "satisfaccion_clientes",
+  "nombre": "Satisfacción de clientes — ejemplo",
+  "presentacion": {
+    "texto": "Buenas {ficha.saludo}, mi nombre es ___ y le llamo de Equipos Consultores por un estudio sobre la atención de {ficha.empresa}.",
+    "ayuda": "Si pregunta por la duración: unos 8 minutos."
+  },
+  "bloques": [
+    {
+      "id": "FILTRO",
+      "pantallas": [
+        {
+          "id": "S_FILTRO",
+          "texto": "¿Usted es {ficha.nombre}?",
+          "preguntas": [
+            {"id": "F1", "tipo": "simple", "texto": "¿Habla con el titular?",
+             "opciones": [{"codigo": "1", "texto": "Sí"}, {"codigo": "2", "texto": "No"}]},
+            {"id": "EDAD", "tipo": "numero", "texto": "¿Qué edad tiene?", "minimo": 18, "maximo": 99,
+             "mostrar_si": {"op": "==", "args": [{"var": "F1"}, "1"]}}
+          ],
+          "siguiente": [
+            {"si": {"op": "==", "args": [{"var": "F1"}, "2"]}, "fin": 20}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ATENCION",
+      "aleatorizar": true,
+      "pantallas": [
+        {"id": "S_SUC", "preguntas": [
+          {"id": "P_SUC", "tipo": "simple", "texto": "¿Cómo califica la atención en sucursal?", "aleatorizar_opciones": true,
+           "opciones": [{"codigo": "1", "texto": "Muy buena"}, {"codigo": "2", "texto": "Buena"}, {"codigo": "3", "texto": "Regular"},
+                        {"codigo": "4", "texto": "Mala"}, {"codigo": "99", "texto": "No sabe", "fija": true}]}]},
+        {"id": "S_WEB", "preguntas": [
+          {"id": "P_WEB", "tipo": "simple", "texto": "¿Y la web?",
+           "opciones": [{"codigo": "1", "texto": "Buena"}, {"codigo": "2", "texto": "Mala"}, {"codigo": "3", "texto": "No la usa", "ir_a": "S_CANALES"}]}]},
+        {"id": "S_APP", "preguntas": [
+          {"id": "P_APP", "tipo": "simple", "texto": "¿Y la aplicación?",
+           "opciones": [{"codigo": "1", "texto": "Buena"}, {"codigo": "2", "texto": "Mala"}]}]}
+      ]
+    },
+    {
+      "id": "CANALES",
+      "pantallas": [
+        {
+          "id": "S_CANALES",
+          "texto": "Usted dijo que la sucursal le parece «{P_SUC.texto}».",
+          "preguntas": [
+            {"id": "CANALES", "tipo": "multiple", "texto": "¿Qué canales usó en el último mes?", "max_respuestas": 3,
+             "opciones": [{"codigo": "1", "texto": "Sucursal"}, {"codigo": "2", "texto": "Web"}, {"codigo": "3", "texto": "App"},
+                          {"codigo": "4", "texto": "Otro", "otro": true}, {"codigo": "9", "texto": "Ninguno", "exclusiva": true}]},
+            {"id": "N_CANALES", "tipo": "formula", "expresion": {"op": "cantidad", "args": [{"var": "CANALES"}]}}
+          ]
+        },
+        {
+          "id": "S_GRILLA",
+          "mostrar_si": {"op": ">", "args": [{"var": "N_CANALES"}, 1]},
+          "preguntas": [
+            {"id": "G", "tipo": "grilla", "texto": "¿Qué tan de acuerdo está?", "aleatorizar_filas": true,
+             "filas": [{"codigo": "a", "texto": "Me atienden rápido"}, {"codigo": "b", "texto": "Me resuelven"}],
+             "opciones": [{"codigo": "1", "texto": "De acuerdo"}, {"codigo": "2", "texto": "En desacuerdo"}]}
+          ]
+        },
+        {
+          "id": "S_CIERRE",
+          "preguntas": [
+            {"id": "COMENT", "tipo": "texto", "obligatoria": false, "largo_maximo": 200, "texto": "¿Algún comentario?"},
+            {"id": "FNAC", "tipo": "fecha", "obligatoria": false, "texto": "Fecha de nacimiento"},
+            {"id": "CI", "tipo": "texto", "obligatoria": false, "patron": "[0-9]{7,8}", "texto": "Cédula (opcional)"}
+          ],
+          "validaciones": [
+            {"si": {"op": "and", "args": [{"op": "<", "args": [{"var": "EDAD"}, 25]}, {"op": "contiene", "args": [{"var": "CANALES"}, "1"]}, {"op": "vacio", "args": [{"var": "COMENT"}]}]},
+             "error": "Para menores de 25 que usan sucursal, registrá un comentario."}
+          ]
+        }
+      ]
+    }
+  ]
+}

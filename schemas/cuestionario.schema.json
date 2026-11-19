@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://invoke2.equipos.com.uy/schemas/cuestionario.schema.json",
+  "title": "Cuestionario INVOKE 2",
+  "description": "ADR-006: el cuestionario es un documento JSON validado contra este esquema; es a la vez fuente de verdad y formato de ejecución. Cubre el piso funcional del DTD legacy: opciones simples y múltiples, grillas, cajas de texto y código, fórmulas, validaciones por tipo, saltos condicionales, randomización de bloques, opciones y filas, y sustitución de texto desde la ficha.",
+  "type": "object",
+  "required": ["formato", "id", "nombre", "bloques"],
+  "additionalProperties": false,
+  "properties": {
+    "formato": {"const": 1},
+    "id": {"$ref": "#/$defs/identificador"},
+    "nombre": {"type": "string", "minLength": 1},
+    "descripcion": {"type": "string"},
+    "presentacion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "texto": {"type": "string"},
+        "ayuda": {"type": "string"}
+      }
+    },
+    "bloques": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/bloque"}}
+  },
+  "$defs": {
+    "identificador": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$"},
+    "codigo": {
+      "description": "Código de respuesta. 1998 y -1 quedan reservados (legacy: fuera de cuota y sin dato).",
+      "type": "string", "pattern": "^-?[0-9A-Za-z_]+$", "not": {"enum": ["1998", "-1"]}
+    },
+    "expresion": {
+      "description": "AST restringido: ver invoke/dominio/expresiones.py.",
+      "oneOf": [
+        {"type": ["null", "boolean", "number", "string"]},
+        {"type": "object", "required": ["var"], "additionalProperties": false, "properties": {"var": {"type": "string"}}},
+        {"type": "object", "required": ["ficha"], "additionalProperties": false, "properties": {"ficha": {"type": "string"}}},
+        {
+          "type": "object", "required": ["op"], "additionalProperties": false,
+          "properties": {
+            "op": {"enum": ["==", "!=", "<", "<=", ">", ">=", "and", "or", "not", "+", "-", "*", "/", "in",
+                            "contiene", "vacio", "cantidad", "si", "min", "max", "redondear", "concat"]},
+            "args": {"type": "array", "items": {"$ref": "#/$defs/expresion"}}
+          }
+        }
+      ]
+    },
+    "bloque": {
+      "type": "object",
+      "required": ["id", "pantallas"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/identificador"},
+        "aleatorizar": {"type": "boolean", "default": false,
+                        "description": "Baraja el orden de las pantallas del bloque (legacy <random>)."},
+        "mostrar_si": {"$ref": "#/$defs/expresion"},
+        "pantallas": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/pantalla"}}
+      }
+    },
+    "pantalla": {
+      "type": "object",
+      "required": ["id", "preguntas"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/identificador"},
+        "texto": {"type": "string", "description": "Speech. Admite {ficha.prop}, {VAR} y {VAR.texto}."},
+        "ayuda": {"type": "string"},
+        "mostrar_si": {"$ref": "#/$defs/expresion"},
+        "preguntas": {"type": "array", "items": {"$ref": "#/$defs/pregunta"}},
+        "validaciones": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["si", "error"], "additionalProperties": false,
+            "properties": {
+              "si": {"$ref": "#/$defs/expresion", "description": "Condición de ERROR: si es verdadera, no se avanza."},
+              "error": {"type": "string"}
+            }
+          }
+        },
+        "siguiente": {
+          "type": "array",
+          "description": "Reglas de flujo evaluadas en orden; la primera que aplica gana. Sin regla aplicable: pantalla siguiente.",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "si": {"$ref": "#/$defs/expresion"},
+              "ir_a": {"$ref": "#/$defs/identificador"},
+              "fin": {"type": "integer", "description": "Termina la entrevista con este código de disposición de encuesta."}
+            },
+            "oneOf": [{"required": ["ir_a"]}, {"required": ["fin"]}]
+          }
+        }
+      }
+    },
+    "opcion": {
+      "type": "object",
+      "required": ["codigo", "texto"],
+      "additionalProperties": false,
+      "properties": {
+        "codigo": {"$ref": "#/$defs/codigo"},
+        "texto": {"type": "string"},
+        "otro": {"type": "boolean", "default": false, "description": "Pide especificar en VAR.otro."},
+        "exclusiva": {"type": "boolean", "default": false, "description": "En múltiple, no se combina con otras (Ns/Nc)."},
+        "fija": {"type": "boolean", "default": false, "description": "No se baraja al aleatorizar."},
+        "mostrar_si": {"$ref": "#/$defs/expresion"},
+        "ir_a": {"$ref": "#/$defs/identificador", "description": "Salto directo al elegirla (legacy SIGUE)."}
+      }
+    },
+    "pregunta": {
+      "type": "object",
+      "required": ["id", "tipo"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/identificador"},
+        "tipo": {"enum": ["simple", "multiple", "grilla", "texto", "numero", "fecha", "hora", "codigo", "formula"]},
+        "texto": {"type": "string"},
+        "ayuda": {"type": "string"},
+        "obligatoria": {"type": "boolean", "default": true},
+        "mostrar_si": {"$ref": "#/$defs/expresion"},
+        "opciones": {"type": "array", "items": {"$ref": "#/$defs/opcion"}},
+        "aleatorizar_opciones": {"type": "boolean", "default": false},
+        "min_respuestas": {"type": "integer", "minimum": 0},
+        "max_respuestas": {"type": "integer", "minimum": 1},
+        "filas": {"type": "array", "items": {"$ref": "#/$defs/opcion"}},
+        "aleatorizar_filas": {"type": "boolean", "default": false},
+        "tipo_celda": {"enum": ["simple", "numero", "texto"], "default": "simple"},
+        "minimo": {"type": "number"},
+        "maximo": {"type": "number"},
+        "decimales": {"type": "integer", "minimum": 0, "default": 0},
+        "largo_maximo": {"type": "integer", "minimum": 1},
+        "patron": {"type": "string", "description": "Expresión regular para texto (legacy REGEXP)."},
+        "error": {"type": "string", "description": "Mensaje si la validación de tipo falla."},
+        "expresion": {"$ref": "#/$defs/expresion", "description": "Solo en tipo formula: valor calculado."}
+      },
+      "allOf": [
+        {"if": {"properties": {"tipo": {"enum": ["simple", "multiple"]}}}, "then": {"required": ["opciones"]}},
+        {"if": {"properties": {"tipo": {"const": "grilla"}}}, "then": {"required": ["opciones", "filas"]}},
+        {"if": {"properties": {"tipo": {"const": "formula"}}}, "then": {"required": ["expresion"]}}
+      ]
+    }
+  }
+}
