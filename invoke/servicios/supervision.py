@@ -97,7 +97,7 @@ def escuchar(cur, u: Usuario, participante_id: int, susurro: bool = False) -> di
     cur.execute("""INSERT INTO invoke.comando_telefonia (tipo, participante_id, llamada_id, autor, datos)
                    VALUES ('escuchar', %s, %s, %s, %s)""",
                 (participante_id, pe["llamada_id"], u.uid,
-                 db.Jsonb({"canal_supervisor": sup["canal_audio"], "susurro": susurro})))
+                 db.Jsonb({"supervisor_participante": u.participante_id, "susurro": susurro})))
     db.evento(cur, "escucha_iniciada", estudio_id=pe["estudio_id"], participante_id=participante_id,
               llamada_id=pe["llamada_id"], autor=u.uid, datos={"susurro": susurro})
     return {"ok": True}

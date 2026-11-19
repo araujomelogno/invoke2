@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Puesto — INVOKE 2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/equipos.css" />
+  <script src="/js/config.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="row" style="position:relative; z-index:1; gap:1.1rem;">
+      <img class="logo-horizontal-white" src="/img/logo-horizontal-blanco.png" alt="Equipos Consultores" style="height:38px" />
+      <div id="tb-estudio" class="tb-name"></div>
+    </div>
+    <div class="row" style="position:relative; z-index:1;">
+      <span id="tb-red" class="small" style="color:rgba(255,255,255,0.6)"></span>
+      <span id="tb-audio" class="badge badge-off">Audio</span>
+      <span id="tb-estado"></span>
+      <div class="tb-user"><div class="user-avatar" id="tb-avatar">·</div>
+        <div><div class="tb-name" id="tb-nombre"></div><div class="tb-role">Encuestador</div></div></div>
+      <button class="btn btn-outline btn-sm" id="tb-salir" style="border-color:rgba(255,255,255,0.2); color:rgba(255,255,255,0.85);">Salir</button>
+    </div>
+  </header>
+  <main id="main"><div class="center-screen" style="min-height:60vh"><div class="spinner"></div></div></main>
+  <audio id="audio-remoto" autoplay></audio>
+  <div id="toast-wrap"></div>
+  <script type="module" src="/js/estacion.js"></script>
+</body>
+</html>

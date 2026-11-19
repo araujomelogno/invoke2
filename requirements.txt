@@ -1,0 +1,12 @@
+# Núcleo compartido (invoke/) y servicios de Cloud Run (services/).
+psycopg[binary]==3.2.3
+psycopg-pool==3.2.4
+jsonschema==4.23.0
+openpyxl==3.1.5
+pandas==2.2.3
+pyreadstat==1.2.8
+firebase-admin==6.6.0
+httpx==0.27.2
+websockets==13.1
+starlette==0.41.3
+uvicorn[standard]==0.32.1
