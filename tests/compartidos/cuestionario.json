@@ -1,0 +1,683 @@
+{
+ "ficha": {
+  "nombre": "Ana Pérez",
+  "saludo": "tardes",
+  "empresa": "Banco Ejemplo"
+ },
+ "definicion": "schemas/ejemplos/satisfaccion_clientes.json",
+ "casos": [
+  {
+   "nombre": "filtrado por no titular",
+   "semilla": 7,
+   "respuestas": {
+    "F1": "2"
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO"
+    ],
+    "fin": 20,
+    "errores": {},
+    "secuencia": [
+     "S_FILTRO",
+     "S_SUC",
+     "S_APP",
+     "S_WEB",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "3",
+     "2",
+     "1",
+     "4",
+     "99"
+    ],
+    "texto_canales": "Sucursal: ; canales ; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "falta edad",
+   "semilla": 7,
+   "respuestas": {
+    "F1": "1"
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO"
+    ],
+    "fin": null,
+    "errores": {
+     "S_FILTRO": {
+      "EDAD": "Respuesta obligatoria"
+     }
+    },
+    "secuencia": [
+     "S_FILTRO",
+     "S_SUC",
+     "S_APP",
+     "S_WEB",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "3",
+     "2",
+     "1",
+     "4",
+     "99"
+    ],
+    "texto_canales": "Sucursal: ; canales ; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "edad fuera de rango",
+   "semilla": 7,
+   "respuestas": {
+    "F1": "1",
+    "EDAD": "15"
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO"
+    ],
+    "fin": null,
+    "errores": {
+     "S_FILTRO": {
+      "EDAD": "Ingresá un valor entre 18 y 99"
+     }
+    },
+    "secuencia": [
+     "S_FILTRO",
+     "S_SUC",
+     "S_APP",
+     "S_WEB",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "3",
+     "2",
+     "1",
+     "4",
+     "99"
+    ],
+    "texto_canales": "Sucursal: ; canales ; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "no usa web salta a canales",
+   "semilla": 11,
+   "respuestas": {
+    "F1": "1",
+    "EDAD": 40,
+    "P_SUC": "2",
+    "P_WEB": "3",
+    "P_APP": "1",
+    "CANALES": [
+     "2"
+    ]
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO",
+     "S_WEB",
+     "S_CANALES",
+     "S_CIERRE"
+    ],
+    "fin": 3,
+    "errores": {},
+    "secuencia": [
+     "S_FILTRO",
+     "S_WEB",
+     "S_APP",
+     "S_SUC",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "3",
+     "1",
+     "4",
+     "2",
+     "99"
+    ],
+    "texto_canales": "Sucursal: Buena; canales 2; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "completa con grilla",
+   "semilla": 12345,
+   "respuestas": {
+    "F1": "1",
+    "EDAD": "30",
+    "P_SUC": "1",
+    "P_WEB": "1",
+    "P_APP": "2",
+    "CANALES": [
+     "1",
+     "3"
+    ],
+    "G.a": "1",
+    "G.b": "2",
+    "COMENT": "ok",
+    "FNAC": "1994-02-28"
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO",
+     "S_SUC",
+     "S_APP",
+     "S_WEB",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "fin": 3,
+    "errores": {},
+    "secuencia": [
+     "S_FILTRO",
+     "S_SUC",
+     "S_APP",
+     "S_WEB",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "1",
+     "2",
+     "4",
+     "3",
+     "99"
+    ],
+    "texto_canales": "Sucursal: Muy buena; canales 1, 3; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "exclusiva combinada",
+   "semilla": 3,
+   "respuestas": {
+    "F1": "1",
+    "EDAD": 50,
+    "P_SUC": "1",
+    "P_WEB": "1",
+    "P_APP": "1",
+    "CANALES": [
+     "1",
+     "9"
+    ]
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO",
+     "S_APP",
+     "S_WEB",
+     "S_SUC",
+     "S_CANALES"
+    ],
+    "fin": null,
+    "errores": {
+     "S_CANALES": {
+      "CANALES": "Una opción exclusiva no se combina con otras"
+     }
+    },
+    "secuencia": [
+     "S_FILTRO",
+     "S_APP",
+     "S_WEB",
+     "S_SUC",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "4",
+     "2",
+     "3",
+     "1",
+     "99"
+    ],
+    "texto_canales": "Sucursal: Muy buena; canales 1, 9; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "otro sin especificar",
+   "semilla": 3,
+   "respuestas": {
+    "F1": "1",
+    "EDAD": 50,
+    "P_SUC": "1",
+    "P_WEB": "1",
+    "P_APP": "1",
+    "CANALES": [
+     "4"
+    ]
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO",
+     "S_APP",
+     "S_WEB",
+     "S_SUC",
+     "S_CANALES"
+    ],
+    "fin": null,
+    "errores": {
+     "S_CANALES": {
+      "CANALES": "Especificá la opción «otro»"
+     }
+    },
+    "secuencia": [
+     "S_FILTRO",
+     "S_APP",
+     "S_WEB",
+     "S_SUC",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "4",
+     "2",
+     "3",
+     "1",
+     "99"
+    ],
+    "texto_canales": "Sucursal: Muy buena; canales 4; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "validación de pantalla",
+   "semilla": 99,
+   "respuestas": {
+    "F1": "1",
+    "EDAD": 20,
+    "P_SUC": "3",
+    "P_WEB": "1",
+    "P_APP": "1",
+    "CANALES": [
+     "1",
+     "2"
+    ],
+    "G.a": "1",
+    "G.b": "1"
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO",
+     "S_WEB",
+     "S_APP",
+     "S_SUC",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "fin": null,
+    "errores": {
+     "S_CIERRE": {
+      "*": "Para menores de 25 que usan sucursal, registrá un comentario."
+     }
+    },
+    "secuencia": [
+     "S_FILTRO",
+     "S_WEB",
+     "S_APP",
+     "S_SUC",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "3",
+     "4",
+     "1",
+     "2",
+     "99"
+    ],
+    "texto_canales": "Sucursal: Regular; canales 1, 2; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "fecha imposible",
+   "semilla": 99,
+   "respuestas": {
+    "F1": "1",
+    "EDAD": 60,
+    "P_SUC": "3",
+    "P_WEB": "1",
+    "P_APP": "1",
+    "CANALES": [
+     "2"
+    ],
+    "FNAC": "2023-02-30"
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO",
+     "S_WEB",
+     "S_APP",
+     "S_SUC",
+     "S_CANALES",
+     "S_CIERRE"
+    ],
+    "fin": null,
+    "errores": {
+     "S_CIERRE": {
+      "FNAC": "Fecha inválida"
+     }
+    },
+    "secuencia": [
+     "S_FILTRO",
+     "S_WEB",
+     "S_APP",
+     "S_SUC",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "3",
+     "4",
+     "1",
+     "2",
+     "99"
+    ],
+    "texto_canales": "Sucursal: Regular; canales 2; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "patrón de cédula",
+   "semilla": 99,
+   "respuestas": {
+    "F1": "1",
+    "EDAD": 60,
+    "P_SUC": "3",
+    "P_WEB": "1",
+    "P_APP": "1",
+    "CANALES": [
+     "2"
+    ],
+    "CI": "12ab"
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO",
+     "S_WEB",
+     "S_APP",
+     "S_SUC",
+     "S_CANALES",
+     "S_CIERRE"
+    ],
+    "fin": null,
+    "errores": {
+     "S_CIERRE": {
+      "CI": "Formato inválido"
+     }
+    },
+    "secuencia": [
+     "S_FILTRO",
+     "S_WEB",
+     "S_APP",
+     "S_SUC",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "3",
+     "4",
+     "1",
+     "2",
+     "99"
+    ],
+    "texto_canales": "Sucursal: Regular; canales 2; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  },
+  {
+   "nombre": "decimales no admitidos",
+   "semilla": 1,
+   "respuestas": {
+    "F1": "1",
+    "EDAD": "30.5"
+   },
+   "esperado": {
+    "visitadas": [
+     "S_FILTRO"
+    ],
+    "fin": null,
+    "errores": {
+     "S_FILTRO": {
+      "EDAD": "Ingresá un valor entre 18 y 99"
+     }
+    },
+    "secuencia": [
+     "S_FILTRO",
+     "S_SUC",
+     "S_APP",
+     "S_WEB",
+     "S_CANALES",
+     "S_GRILLA",
+     "S_CIERRE"
+    ],
+    "opciones_P_SUC": [
+     "4",
+     "1",
+     "3",
+     "2",
+     "99"
+    ],
+    "texto_canales": "Sucursal: ; canales ; Ana Pérez",
+    "primera": "S_FILTRO"
+   }
+  }
+ ],
+ "barajar": [
+  {
+   "semilla": 0,
+   "clave": "B1",
+   "orden": [
+    3,
+    8,
+    1,
+    4,
+    2,
+    9,
+    6,
+    7,
+    0,
+    5
+   ]
+  },
+  {
+   "semilla": 0,
+   "clave": "P1:opciones",
+   "orden": [
+    4,
+    6,
+    8,
+    5,
+    0,
+    9,
+    3,
+    7,
+    1,
+    2
+   ]
+  },
+  {
+   "semilla": 0,
+   "clave": "ñandú",
+   "orden": [
+    4,
+    9,
+    3,
+    1,
+    8,
+    0,
+    2,
+    6,
+    5,
+    7
+   ]
+  },
+  {
+   "semilla": 1,
+   "clave": "B1",
+   "orden": [
+    1,
+    7,
+    5,
+    0,
+    6,
+    8,
+    3,
+    4,
+    9,
+    2
+   ]
+  },
+  {
+   "semilla": 1,
+   "clave": "P1:opciones",
+   "orden": [
+    4,
+    7,
+    8,
+    0,
+    1,
+    9,
+    3,
+    5,
+    6,
+    2
+   ]
+  },
+  {
+   "semilla": 1,
+   "clave": "ñandú",
+   "orden": [
+    5,
+    9,
+    3,
+    1,
+    0,
+    4,
+    2,
+    8,
+    7,
+    6
+   ]
+  },
+  {
+   "semilla": 42,
+   "clave": "B1",
+   "orden": [
+    7,
+    5,
+    0,
+    8,
+    6,
+    1,
+    9,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "semilla": 42,
+   "clave": "P1:opciones",
+   "orden": [
+    5,
+    8,
+    4,
+    7,
+    9,
+    1,
+    0,
+    3,
+    6,
+    2
+   ]
+  },
+  {
+   "semilla": 42,
+   "clave": "ñandú",
+   "orden": [
+    9,
+    8,
+    5,
+    3,
+    6,
+    1,
+    7,
+    2,
+    0,
+    4
+   ]
+  },
+  {
+   "semilla": 2147483653,
+   "clave": "B1",
+   "orden": [
+    8,
+    2,
+    3,
+    6,
+    5,
+    7,
+    4,
+    9,
+    0,
+    1
+   ]
+  },
+  {
+   "semilla": 2147483653,
+   "clave": "P1:opciones",
+   "orden": [
+    5,
+    6,
+    2,
+    4,
+    8,
+    7,
+    9,
+    1,
+    3,
+    0
+   ]
+  },
+  {
+   "semilla": 2147483653,
+   "clave": "ñandú",
+   "orden": [
+    9,
+    1,
+    0,
+    4,
+    8,
+    3,
+    2,
+    5,
+    6,
+    7
+   ]
+  }
+ ]
+}
