@@ -57,7 +57,7 @@ class Participante(Protocol):
 @dataclass
 class EncuestadorWebRTC:
     """Encuestador humano: el caso viaja por WebSocket a la sala y el audio por
-    la pata permanente SIP.js ↔ Asterisk (ver ADR-011 en docs/decisiones.html)."""
+    la pata permanente SIP.js ↔ Asterisk (ver ADR-011 en docs/decisiones.md)."""
 
     participante_id: int
     estado: str = "desconectado"
