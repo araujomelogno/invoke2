@@ -101,10 +101,11 @@ async function abrirTurno(estudioId, prueba) {
   S.cuestionario = S.sesion.cuestionario;
   $('#tb-estudio').innerHTML = `${esc(S.sesion.estudio.nombre)} <span class="badge badge-modo">${esc(S.modo)}</span>`;
   S.sala = conectarSala({ rol: 'encuestador' }, alMensajeSala);
-  await conectarAudio();
   S.estado = 'pausa';
   pintarEstado();
   pintarPuesto();
+  // El audio se conecta en segundo plano: el puesto se pinta igual y avisa si no hay audio.
+  conectarAudio();
   const actual = await api('GET', '/api/estacion/caso');
   if (actual.caso) await mostrarCaso(actual.caso);
 }
@@ -116,7 +117,7 @@ async function conectarAudio() {
     alCaer: () => { pintarAudio(false); toast('Se cortó el audio del puesto. Reconectando…', 'err'); setTimeout(reconectarAudio, 2000); },
   });
   try {
-    await S.telefono.conectar();
+    await Promise.race([S.telefono.conectar(), new Promise((_, no) => setTimeout(() => no(new Error('tiempo agotado')), 10000))]);
   } catch (e) {
     pintarAudio(false);
     toast('No se pudo conectar el audio del puesto: revisá la conexión.', 'err');
@@ -653,4 +654,3 @@ async function finalizar(datos) {
   } catch (e) { toast(/** @type {any} */ (e).message, 'err'); }
 }
 
-window.addEventListener('beforeunload', () => { navigator.sendBeacon?.('/api/estacion/salida'); });

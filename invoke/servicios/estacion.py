@@ -41,9 +41,12 @@ def estudios_disponibles(cur, u: Usuario) -> list[dict]:
 
 
 def iniciar_sesion(cur, u: Usuario, estudio_id: int) -> dict:
-    asignado = db.uno(cur, """SELECT 1 FROM invoke.estudio_usuario eu JOIN invoke.estudio e ON e.id = eu.estudio_id
-                              WHERE eu.estudio_id = %s AND eu.usuario_uid = %s AND e.estado = 'activo'""",
-                      (estudio_id, u.uid))
+    # El supervisor abre sesión en cualquier estudio activo: su "puesto" es el audio de escucha.
+    asignado = db.uno(cur, """SELECT 1 FROM invoke.estudio e
+                              WHERE e.id = %s AND e.estado = 'activo'
+                                AND (%s OR EXISTS (SELECT 1 FROM invoke.estudio_usuario eu
+                                                   WHERE eu.estudio_id = e.id AND eu.usuario_uid = %s))""",
+                      (estudio_id, u.tiene("supervisor", "administrador"), u.uid))
     if not asignado:
         raise ErrorHttp(403, "no estás asignado a ese estudio o el estudio no está activo")
     pid = _participante(cur, u)

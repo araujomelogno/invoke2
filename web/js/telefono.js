@@ -9,6 +9,7 @@
  * atiende y el traspaso en power/predictivo entra en el presupuesto de 1 s.
  * Colgar, mudo y DTMF se piden a la API; la pata permanente no se corta.
  */
+// @ts-ignore -- SIP.js vendoreado (ESM sin build); sus tipos no se chequean.
 import { Web } from '/vendor/sip.js/index.js';
 
 export class Telefono {

@@ -7,6 +7,7 @@ scripts/verificar_accesos.py.
 """
 from __future__ import annotations
 
+import atexit
 import contextlib
 import threading
 from typing import Any, Iterator
@@ -40,6 +41,7 @@ def pool():
                     config().database_url, min_size=1, max_size=5, configure=_configurar,
                     kwargs={"row_factory": dict_row}, open=True,
                 )
+                atexit.register(_pool.close)
     return _pool
 
 

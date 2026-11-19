@@ -28,7 +28,9 @@ function igual(a, b) {
   const na = numero(a), nb = numero(b);
   if (na !== null && nb !== null) return na === nb;
   if (Array.isArray(a) || Array.isArray(b)) {
-    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => igual(x, b[i]));
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    const lb = b;
+    return a.length === lb.length && a.every((x, i) => igual(x, lb[i]));
   }
   if (typeof a === 'boolean' || typeof b === 'boolean') return a === b;
   if (a === undefined) a = null;

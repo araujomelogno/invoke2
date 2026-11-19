@@ -396,7 +396,8 @@ tbody tr:hover td { background: #FAFAFA; }
 .arbol .item.preg { padding-left: 1.4rem; font-weight: 500; color: var(--gray); }
 .arbol .item.preg.activo { color: var(--white); }
 .json-area { font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important; font-size: 0.75rem !important; min-height: 240px !important; }
-.op-fila { display: grid; grid-template-columns: 90px 1fr auto auto; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
+.op-fila { display: grid; grid-template-columns: 58px 1fr auto auto; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
 .op-fila input[type=text] { padding: 0.5rem 0.7rem; font-size: 0.82rem; }
 .check-inline { display: inline-flex; align-items: center; gap: 0.35rem; text-transform: none; letter-spacing: 0; font-size: 0.78rem; font-weight: 600; color: var(--dark2); margin: 0; }
 .check-inline input { accent-color: var(--orange); }
+.grid-2 > .card + .card, .grid-3 > .card + .card, .estacion > .card + .card { margin-top: 0; }
