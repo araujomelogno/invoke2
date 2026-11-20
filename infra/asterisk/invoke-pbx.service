@@ -1,0 +1,28 @@
+# Servicio systemd del PBX de INVOKE 2 en la VM (Ubuntu 26.04).
+# Instalar en /etc/systemd/system/invoke-pbx.service (docs/despliegue.md, PBX).
+#
+# - Antes de arrancar, trae los secretos de Secret Manager a /run/invoke-pbx.env
+#   (tmpfs, no queda en disco).
+# - Red del host: SIP, WSS y el rango RTP se exponen sin NAT de Docker de por medio.
+# - Los certificados y las grabaciones pendientes de subir viven en el host.
+[Unit]
+Description=PBX de INVOKE 2 (Asterisk)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=/opt/invoke/infra/asterisk/cargar_entorno.sh /run/invoke-pbx.env
+ExecStartPre=-/usr/bin/docker rm -f invoke-pbx
+ExecStart=/usr/bin/docker run --name invoke-pbx --network host --env-file /run/invoke-pbx.env \
+  -v /etc/invoke/keys:/run/invoke/keys:ro \
+  -v /etc/invoke/sonidos:/run/invoke/sonidos:ro \
+  -v /var/lib/invoke/grabaciones:/var/spool/asterisk/recording \
+  invoke-pbx:actual
+ExecStop=/usr/bin/docker stop -t 30 invoke-pbx
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

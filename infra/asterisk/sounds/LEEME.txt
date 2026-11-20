@@ -1,3 +1,11 @@
-invoke-disculpas.wav — mensaje breve que se reproduce cuando el sistema abandona una
-llamada en power/predictivo ("Disculpe, le volveremos a llamar"). Grabarlo en 8 kHz
-mono y copiarlo a /var/lib/asterisk/sounds/es/ del PBX. No se versiona el audio.
+invoke-disculpas: mensaje breve que se reproduce cuando el sistema abandona una
+llamada en power/predictivo ("Disculpe, le volveremos a llamar"). Texto: P-06 de
+docs/decisiones.md.
+
+Formato: WAV PCM 16 bits, 8 kHz, mono (el nombre tiene que ser invoke-disculpas.wav).
+Se copia a /etc/invoke/sonidos/ de la VM del PBX; el contenedor lo instala al
+arrancar (instalar_archivos.sh). Sin él, el PBX de producción no arranca.
+El audio no se versiona en el repositorio.
+
+Para convertir una grabación cualquiera:
+  sox entrada.wav -r 8000 -c 1 -b 16 invoke-disculpas.wav

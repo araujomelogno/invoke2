@@ -315,3 +315,5 @@ Grupos: C completas · I interrumpidas no promovidas · R rechazos · NC elegibl
 **¿Por qué el reporte de hoy dice otra cosa que el de ayer?** Si el estudio sigue abierto, es un reporte parcial y cambia a medida que se resuelven casos. Si pedís el mismo corte en el tiempo, el número es exactamente el mismo.
 
 **¿Qué pasa si se cae mi conexión en medio de una llamada?** El audio se corta y el puesto reconecta solo. El caso sigue asignado a vos: al volver, clasificá el intento.
+
+**¿Por qué no puedo entrar a otro estudio?** Porque te quedó una llamada sin clasificar en el estudio anterior. Volvé a ese estudio, clasificá el intento y después cambiá. Así ningún caso queda colgado entre dos estudios.

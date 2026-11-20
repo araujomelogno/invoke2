@@ -13,3 +13,5 @@ functions/venv/
 *.sav
 node_modules/
 .DS_Store
+infra/asterisk/keys-dev/
+lab/

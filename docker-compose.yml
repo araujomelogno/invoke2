@@ -10,6 +10,8 @@ services:
     build: infra/asterisk
     network_mode: host
     env_file: .env
+    # Certificado de desarrollo (puede ser autofirmado): pbx.crt y pbx.key. No se versiona.
+    volumes: ["./infra/asterisk/keys-dev:/run/invoke/keys:ro"]
   coturn:
     image: coturn/coturn:4.6
     network_mode: host

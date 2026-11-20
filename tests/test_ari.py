@@ -61,11 +61,15 @@ class Doble:
     def colgar(self, c):
         self.acciones.append(("colgar", c))
 
-    def reproducir(self, c, s):
+    def reproducir(self, c, s, rid):
         self.acciones.append(("reproducir", c, s))
+        return True
 
     def grabar(self, b, n):
         self.acciones.append(("grabar", b, n))
+
+    def continuar_amd(self, c):
+        self.acciones.append(("amd", c))
 
 
 def tipos(d):
@@ -95,12 +99,26 @@ def test_power_abandonada_y_maquina():
                "L4": {"caso_id": 10, "participante_id": None, "tipo": "encuesta"}}, disponible=None)
     t = Traductor(d)
     t.manejar({"type": "StasisStart", "args": ["cliente", "L3", "HUMAN"], "channel": {"id": "L3"}})
-    assert "llamada_abandonada" in tipos(d) and ("colgar", "L3") in d.acciones
+    # Se corta cuando termina el mensaje, no al empezarlo.
+    assert "llamada_abandonada" in tipos(d) and ("colgar", "L3") not in d.acciones
+    t.manejar({"type": "PlaybackFinished", "playback": {"id": "disculpas-L3"}})
+    assert ("colgar", "L3") in d.acciones
     t.manejar({"type": "ChannelDestroyed", "channel": {"id": "L3"}, "cause": 16})
     assert d.eventos[-1][1]["datos"]["codigo"] == 30
     t.manejar({"type": "StasisStart", "args": ["cliente", "L4", "MACHINE"], "channel": {"id": "L4"}})
     t.manejar({"type": "ChannelDestroyed", "channel": {"id": "L4"}, "cause": 16})
     assert d.eventos[-1][1]["datos"]["codigo"] == 31
+
+
+def test_power_pasa_por_amd_y_registra_la_atencion_una_vez():
+    """La llamada de power entra a la aplicación como "amd", va al dialplan y vuelve como "cliente"."""
+    d = Doble({"L7": {"caso_id": 11, "participante_id": None, "tipo": "encuesta"}}, disponible=3)
+    t = Traductor(d)
+    t.manejar({"type": "StasisStart", "args": ["amd", "L7"], "channel": {"id": "L7"}})
+    assert ("amd", "L7") in d.acciones and tipos(d) == ["llamada_atendida"]
+    t.manejar({"type": "StasisStart", "args": ["cliente", "L7", "HUMAN"], "channel": {"id": "L7"}})
+    assert tipos(d).count("llamada_atendida") == 1
+    assert ("puente", "puesto-3", "L7") in d.acciones
 
 
 def test_power_conecta():
