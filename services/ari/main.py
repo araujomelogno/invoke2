@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import urllib.parse
+import uuid
 
 import httpx
 import websockets
@@ -30,6 +31,17 @@ from services.ari.traductor import Traductor  # noqa: E402
 log = logging.getLogger("invoke.ari")
 
 
+def es_llamada(canal: str | None) -> bool:
+    """Las llamadas de INVOKE se originan con channelId = llamada_id (un UUID). Los demás
+    canales (patas de puesto, snoop, mitades ";2" de los Local) no son llamadas y no se
+    buscan en la base (verificado contra Asterisk 20.6: rompían la consulta)."""
+    try:
+        uuid.UUID(str(canal))
+        return True
+    except ValueError:
+        return False
+
+
 class PuertoReal:
     """Implementación del puerto del traductor contra Postgres y ARI REST."""
 
@@ -43,6 +55,8 @@ class PuertoReal:
             db.evento(cur, tipo, **campos)
 
     def llamada(self, llamada_id):
+        if not es_llamada(llamada_id):
+            return None
         with db.transaccion() as cur:
             o = db.uno(cur, """SELECT caso_id, participante_id, estudio_id, datos FROM invoke.evento
                                WHERE llamada_id = %s AND tipo = 'llamada_originada' LIMIT 1""", (llamada_id,))
@@ -62,6 +76,8 @@ class PuertoReal:
 
     def estado_llamada(self, llamada_id):
         """Estado persistido de la llamada (encargo D2): la base es la fuente, no la memoria."""
+        if not es_llamada(llamada_id):
+            return {}
         with db.transaccion() as cur:
             fila = db.uno(cur, """
                 SELECT l.atendida_en IS NOT NULL AS atendida, l.conectada_en IS NOT NULL AS conectada,
@@ -72,6 +88,8 @@ class PuertoReal:
         return fila or {}
 
     def tiene_disposicion(self, llamada_id):
+        if not es_llamada(llamada_id):
+            return False
         with db.transaccion() as cur:
             # Una llamada descartada por el pacer tampoco lleva disposición: no fue un intento.
             return db.uno(cur, "SELECT 1 FROM invoke.evento WHERE llamada_id = %s AND tipo IN ('disposicion_telefono', 'llamada_descartada') LIMIT 1",
@@ -101,11 +119,18 @@ class PuertoReal:
         if r.status_code not in (204, 404):
             r.raise_for_status()
 
-    def reproducir(self, canal, sonido):
+    def reproducir(self, canal, sonido, reproduccion_id):
         try:
-            self._post(f"/channels/{canal}/play", media=f"sound:{sonido}")
+            self._post(f"/channels/{canal}/play/{reproduccion_id}", media=f"sound:{sonido}", lang="es")
+            return True
         except httpx.HTTPError:
             log.warning("no se pudo reproducir %s en %s", sonido, canal)
+            return False
+
+    def continuar_amd(self, canal):
+        """Saca la llamada de Stasis hacia el dialplan invoke-amd, que corre AMD() y la
+        devuelve a Stasis como "cliente" con el resultado."""
+        self._post(f"/channels/{canal}/continue", context="invoke-amd", extension="s", priority=1)
 
     def grabar(self, puente, nombre):
         self._post(f"/bridges/{puente}/record", name=nombre, format="wav", ifExists="overwrite")
@@ -122,16 +147,15 @@ def ejecutar_comando(puerto: PuertoReal, cmd: dict, traductor: Traductor | None 
         params = {"endpoint": endpoint, "channelId": llamada, "timeout": d.get("timeout", 30)}
         if cfg.caller_id:
             params["callerId"] = cfg.caller_id
-        if d.get("amd"):
-            # Power/predictivo: pasa por AMD() en el dialplan y entra a Stasis con el resultado.
-            params.update({"context": "invoke-amd", "extension": "s", "priority": 1,
-                           "variables": None})
-            r = puerto.http.post("/channels", params={k: v for k, v in params.items() if v is not None},
-                                 json={"variables": {"LLAMADA": llamada}})
-            r.raise_for_status()
-        else:
-            params.update({"app": cfg.ari_app, "appArgs": f"cliente,{llamada}"})
-            puerto._post("/channels", **params)
+        # Toda llamada se origina hacia la aplicación: así queda suscripta desde que nace y
+        # su ChannelDestroyed llega siempre, también si nunca atienden. En power y
+        # predictivo entra primero como "amd" y el traductor la manda al dialplan a
+        # pasar por AMD() (verificado contra Asterisk 20.6: originada directo al dialplan,
+        # su fin nunca llegaba y la llamada quedaba sin terminar ni clasificar).
+        rol = "amd" if d.get("amd") else "cliente"
+        params.update({"app": cfg.ari_app, "appArgs": f"{rol},{llamada}"})
+        r = puerto.http.post("/channels", params=params, json={"variables": {"LLAMADA": llamada}})
+        r.raise_for_status()
         if traductor is not None:
             traductor.registrar_originada(llamada)
         return "originada"

@@ -50,6 +50,11 @@ def iniciar_sesion(cur, u: Usuario, estudio_id: int) -> dict:
     if not asignado:
         raise ErrorHttp(403, "no estás asignado a ese estudio o el estudio no está activo")
     pid = _participante(cur, u)
+    pendiente = db.uno(cur, """SELECT ce.caso_id, ce.estudio_id, ce.estado, e.codigo FROM invoke.caso_estado ce
+                              JOIN invoke.estudio e ON e.id = ce.estudio_id WHERE ce.asignado_a = %s""", (pid,))
+    if pendiente and pendiente["estudio_id"] != estudio_id and pendiente["estado"] == "en_llamada":
+        raise ErrorHttp(409, f"tenés el caso {pendiente['caso_id']} de {pendiente['codigo']} sin clasificar: "
+                             "volvé a ese estudio y clasificalo antes de cambiar")
     actual = _estado(cur, pid)
     if actual["estado"] != "desconectado":
         _cerrar(cur, pid, actual, motivo="nueva_sesion")

@@ -505,3 +505,27 @@ def test_pacer_mezcla_y_graba(cur, esc):
                                           (e["id"],))]
     assert all(d["grabar"] is True for d in datos)
     assert sorted(d["poblacion"] for d in datos) == ["fresco"] * 3 + ["reintento"] * 3
+
+
+def test_caso_pendiente_no_cruza_de_estudio(cur, esc, conn):
+    """Hallado en el PBX de laboratorio: un caso conectado sin clasificar no aparece en
+    la sesión de otro estudio; se pide clasificarlo primero."""
+    from invoke.enrutador import ErrorHttp
+
+    e1, e2 = esc.estudio(modo_discado="power"), esc.estudio()
+    a = esc.usuario()
+    for e in (e1, e2):
+        cur.execute("INSERT INTO invoke.estudio_usuario VALUES (%s, %s)", (e["id"], a.uid))
+    esc.sesion(a, e1)
+    esc.caso(e1)
+    esc.caso(e2)
+    ll = db.todos(cur, "SELECT * FROM invoke.reservar_casos_pacer(%s, 1)", (e1["id"],))[0]["llamada_id"]
+    assert db.uno(cur, "SELECT invoke.tomar_participante_para(%s) AS p", (ll,))["p"] == a.participante_id
+    with pytest.raises(ErrorHttp, match="sin clasificar"):
+        estacion.iniciar_sesion(cur, a, e2["id"])
+    db.evento(cur, "estado_participante", participante_id=a.participante_id, estudio_id=e2["id"], datos={"estado": "disponible"})
+    cur.execute("RESET ROLE")
+    cur.execute("UPDATE invoke.participante_estado SET estudio_id = %s WHERE participante_id = %s", (e2["id"], a.participante_id))
+    cur.execute("SET ROLE invoke_app")
+    with pytest.raises(psycopg.errors.RaiseException, match="sin clasificar en otro estudio"), conn.transaction():
+        cur.execute("SELECT invoke.asignar_caso(%s, %s)", (a.participante_id, e2["id"]))

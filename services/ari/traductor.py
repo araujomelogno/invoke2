@@ -11,7 +11,8 @@ de base y de ARI, para poder probarlo con dobles (tests/test_ari.py).
 
 Canales que llegan a la aplicación Stasis "invoke":
     puesto,<participante_id>          pata permanente del navegador (ADR-011)
-    cliente,<llamada_id>[,<AMD>]      pata del respondente, ya atendida
+    amd,<llamada_id>                  power/predictivo recién atendida: va al dialplan a AMD()
+    cliente,<llamada_id>[,<AMD>]      pata del respondente, ya atendida (y clasificada por AMD)
     snoop,<participante_supervisor>   escucha del supervisor
 """
 from __future__ import annotations
@@ -37,7 +38,8 @@ class Puerto(Protocol):
     def puente_de(self, participante_id: int) -> str: ...
     def agregar_a_puente(self, puente: str, canal: str) -> None: ...
     def colgar(self, canal: str) -> None: ...
-    def reproducir(self, canal: str, sonido: str) -> None: ...
+    def reproducir(self, canal: str, sonido: str, reproduccion_id: str) -> bool: ...
+    def continuar_amd(self, canal: str) -> None: ...
     def grabar(self, puente: str, nombre: str) -> None: ...
 
 
@@ -59,6 +61,7 @@ class Traductor:
     llamadas: dict[str, EstadoLlamada] = field(default_factory=dict)
     puestos: dict[str, int] = field(default_factory=dict)        # canal → participante
     snoops: dict[str, int] = field(default_factory=dict)         # canal snoop → supervisor
+    colgar_al_terminar: dict[str, str] = field(default_factory=dict)  # reproducción → canal
 
     def registrar_originada(self, llamada_id: str) -> None:
         """La llamada existe desde que se origina, no desde que atienden (encargo D3):
@@ -77,6 +80,12 @@ class Traductor:
                 self.puerto.evento("llamada_timbrando", llamada_id=canal, ocurrido_en=ev.get("timestamp"))
         elif tipo == "ChannelDestroyed":
             self._destruido(canal, ev.get("cause"), ev.get("timestamp"))
+        elif tipo == "PlaybackFinished":
+            # El mensaje de disculpas terminó: recién ahora se corta (antes se cortaba al
+            # empezar y la persona no oía nada; verificado contra Asterisk 20.6).
+            canal_a_colgar = self.colgar_al_terminar.pop((ev.get("playback") or {}).get("id", ""), None)
+            if canal_a_colgar:
+                self.puerto.colgar(canal_a_colgar)
         elif tipo == "RecordingFinished":
             nombre = (ev.get("recording") or {}).get("name", "")
             if nombre.startswith("llamada-"):
@@ -95,6 +104,17 @@ class Traductor:
         if rol == "puesto":
             pid = int(args[1])
             self.puertos_alta(canal, pid, t)
+        elif rol == "amd":
+            # Power/predictivo: atendieron. Se registra ahora (es el momento real de la
+            # atención) y la llamada va al dialplan a pasar por AMD().
+            info = self.puerto.llamada(args[1])
+            if info is None:
+                self.puerto.colgar(canal)
+                return
+            est = self.llamadas.setdefault(args[1], EstadoLlamada(args[1]))
+            est.atendida = True
+            self.puerto.evento("llamada_atendida", llamada_id=args[1], caso_id=info.get("caso_id"), ocurrido_en=t)
+            self.puerto.continuar_amd(canal)
         elif rol == "cliente":
             self._cliente(args[1], canal, args[2] if len(args) > 2 else None, t)
         elif rol == "snoop":
@@ -117,8 +137,9 @@ class Traductor:
             self.puerto.colgar(canal)
             return
         est = self.llamadas.setdefault(llamada_id, EstadoLlamada(llamada_id))
+        if not est.atendida:   # en power ya se registró al entrar como "amd"
+            self.puerto.evento("llamada_atendida", llamada_id=llamada_id, caso_id=info.get("caso_id"), ocurrido_en=t)
         est.atendida = True
-        self.puerto.evento("llamada_atendida", llamada_id=llamada_id, caso_id=info.get("caso_id"), ocurrido_en=t)
         if amd:
             est.amd = amd
             self.puerto.evento("amd_resultado", llamada_id=llamada_id, caso_id=info.get("caso_id"),
@@ -134,8 +155,11 @@ class Traductor:
                 # Camino I: nadie disponible. Abandonada: registra, avisa y corta.
                 est.abandonada = True
                 self.puerto.evento("llamada_abandonada", llamada_id=llamada_id, caso_id=info.get("caso_id"), ocurrido_en=t)
-                self.puerto.reproducir(canal, "invoke-disculpas")
-                self.puerto.colgar(canal)
+                reproduccion = f"disculpas-{llamada_id}"
+                if self.puerto.reproducir(canal, "invoke-disculpas", reproduccion):
+                    self.colgar_al_terminar[reproduccion] = canal
+                else:
+                    self.puerto.colgar(canal)
                 return
         else:
             self.puerto.evento("llamada_conectada", llamada_id=llamada_id, caso_id=info.get("caso_id"),
