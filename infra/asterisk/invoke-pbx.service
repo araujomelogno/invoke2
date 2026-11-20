@@ -1,4 +1,4 @@
-# Servicio systemd del PBX de INVOKE 2 en la VM (Ubuntu 24.04).
+# Servicio systemd del PBX de INVOKE 2 en la VM (Ubuntu 26.04).
 # Instalar en /etc/systemd/system/invoke-pbx.service (docs/despliegue.md, PBX).
 #
 # - Antes de arrancar, trae los secretos de Secret Manager a /run/invoke-pbx.env

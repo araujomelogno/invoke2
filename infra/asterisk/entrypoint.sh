@@ -52,5 +52,9 @@ if [[ ! -s /etc/asterisk/keys/pbx.crt || ! -s /etc/asterisk/keys/pbx.key ]]; the
   exit 1
 fi
 
+# Sin init (contenedor), nadie crea el directorio del socket de control, y el paquete de
+# Ubuntu 26.04 no trae el de grabaciones (sin él, ARI responde 500 al grabar): los crea el arranque.
+install -d -o asterisk -g asterisk -m 0755 /var/run/asterisk
+install -d -o asterisk -g asterisk -m 0750 /var/spool/asterisk/recording
 chown -R asterisk:asterisk /etc/asterisk /var/spool/asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk
 exec asterisk -f -U asterisk -G asterisk -vvv

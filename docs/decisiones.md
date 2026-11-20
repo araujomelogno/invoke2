@@ -21,7 +21,7 @@ flowchart LR
   N[Navegador<br/>puesto, sala, admin, editor] -->|HTTPS| F[Firebase<br/>Hosting, Auth, Functions]
   N -->|WebSocket| CR[Cloud Run<br/>sala, ari, pacer]
   N -->|SIP/WSS, SRTP| T[coturn]
-  T -->|audio relay| A[Asterisk 20]
+  T -->|audio relay| A[Asterisk 22]
   F -->|psycopg 3, VPC| PG[(Cloud SQL<br/>Postgres)]
   CR --> PG
   CR -->|ARI| A
@@ -53,7 +53,7 @@ Postgres decide; Cloud Run reacciona. Ningún componente le pregunta a Asterisk 
 
 ### ADR-003 — Asterisk moderno con ARI, no AMI
 
-**Estado:** implementada y validada contra Asterisk 20.6 en el PBX de laboratorio (44 de 44, ver «Hallazgos»). Falta el trunk del proveedor y el audio de un navegador real (P-01).
+**Estado:** implementada y validada contra Asterisk 20.6 y después contra Asterisk 22.5, la versión de producción, en el PBX de laboratorio (44 de 44, ver «Hallazgos»). Falta el trunk del proveedor y el audio de un navegador real (P-01).
 
 - **Decisión.** Asterisk 20+ con `chan_pjsip`, WSS hacia el navegador, trunk existente hacia la PSTN y control por ARI.
 - **Dónde.** `infra/asterisk/` (AMI deshabilitado en `modules.conf`). `services/ari/traductor.py` convierte eventos ARI en hechos. Cada llamada se origina con `channelId = llamada_id`, así que no hay correlación manual por `actionId`/`uniqueId` (las 956 líneas del `CallManagerImpl` legacy).
@@ -130,19 +130,21 @@ Postgres decide; Cloud Run reacciona. Ningún componente le pregunta a Asterisk 
 - **Por qué no contradice ADR-002.** No es un contador de reporte: ningún reporte la lee. Además es reconstruible: `invoke.reconstruir_caso_estado(caso)` la rehace reproduciendo los eventos, y `test_proyeccion_reconstruible` verifica que coincide con la incremental.
 - **Cierres por tope.** Cuando la proyección cierra un caso por tope de intentos, de disposición o de franjas, emite el hecho `caso_cerrado`, así el cierre también queda en el log (DI-02).
 
-### ADR-013 — El PBX: Asterisk 20 de Ubuntu, en Docker bajo systemd, configurado como código
+### ADR-013 — El PBX: Asterisk 22 LTS de Ubuntu 26.04, en Docker bajo systemd, configurado como código
 
-**Estado:** implementada y validada con la prueba de laboratorio. El procedimiento está en `docs/despliegue.md`, paso 4.
+**Estado:** implementada y validada con la prueba de laboratorio (44 de 44 en Asterisk 22.5.2). El procedimiento está en `docs/despliegue.md`, paso 4.
 
-- **Contexto.** El PRD decide *qué* (Asterisk moderno con ARI, ADR-003) pero no *cómo se instala y opera*. El PBX es parte del alcance: lo despliega y lo opera Equipos, así que su configuración se versiona y se prueba como el resto.
-- **Versión y origen.** Asterisk 20.6 del paquete de Ubuntu 24.04 (`asterisk`, `asterisk-modules`, `asterisk-core-sounds-es`). Trae todo lo que el sistema usa (`chan_pjsip`, `res_ari`, `res_stasis_snoop`, `app_amd`, `res_config_pgsql`, `codec_opus_open_source`), verificado módulo por módulo. No se compila: compilar es otra cosa que mantener, y la versión del paquete es la que se probó. **Costo:** Asterisk 20 está en su etapa de solo parches de seguridad y el paquete está en *universe*; hay que pasar a 22 LTS antes de que termine el soporte (P-15).
-- **Empaquetado.** Una imagen Docker propia (`infra/asterisk/Dockerfile`) con las plantillas `.conf` del repositorio; `entrypoint.sh` las completa con variables de entorno al arrancar. El contenedor usa la red del host (sin NAT de Docker sobre 10.000 puertos RTP) y lo gobierna una unidad de systemd (`invoke-pbx.service`) en una VM Ubuntu 24.04 LTS. No se usó Container-Optimized OS porque el host necesita `gcloud` (secretos), `certbot` y systemd.
+- **Contexto.** El PRD decide *qué* (Asterisk 20 o superior con ARI, ADR-003) pero no *cómo se instala y opera*. El PBX es parte del alcance: lo despliega y lo opera Equipos, así que su configuración se versiona y se prueba como el resto.
+- **Versión y origen.** Asterisk 22 LTS, del paquete de Ubuntu 26.04 LTS (`asterisk`, `asterisk-modules`, `asterisk-core-sounds-es`; 22.5.2 al momento de escribir esto). Trae todo lo que el sistema usa (`chan_pjsip`, `res_ari`, `res_stasis_snoop`, `app_amd`, `res_config_pgsql`), verificado módulo por módulo, e incluye `codec_opus_open_source`: Asterisk oficial no trae un Opus libre (el de Sangoma es un binario cerrado), y sin él no hay Opus por encuestador (H4).
+- **Por qué 22 y no 20.** La primera versión de este ADR usaba Asterisk 20.6 de Ubuntu 24.04, porque era el paquete disponible y fue lo primero que se validó. Asterisk 20 ya está en su etapa de solo parches de seguridad, que termina en octubre de 2027: el piloto habría tenido que migrar el PBX con el sistema funcionando. Asterisk 22 tiene soporte completo hasta 2028 y de seguridad hasta 2029, y como todavía no hay nada en producción, cambiar ahora cuesta lo mínimo. La migración se validó con la misma prueba y dejó los hallazgos de la tabla de abajo; el código de `services/ari` no cambió.
+- **No se compila.** El paquete es lo que se prueba, y compilar suma un proceso de construcción que mantener y el problema del Opus libre. **Costo:** el paquete está en *universe* (parches de la comunidad, no de Canonical) y va atrasado respecto de Asterisk oficial (22.5.2 contra 22.10). Se mitiga reconstruyendo la imagen todos los meses y ante cada aviso de seguridad (`docs/despliegue.md`, 4.11).
+- **Empaquetado.** Una imagen Docker propia (`infra/asterisk/Dockerfile`, base `ubuntu:26.04`) con las plantillas `.conf` del repositorio; `entrypoint.sh` las completa con variables de entorno al arrancar y crea lo que en un contenedor nadie crea (el directorio del socket de control y el de grabaciones). El contenedor usa la red del host (sin NAT de Docker sobre 10.000 puertos RTP) y lo gobierna una unidad de systemd (`invoke-pbx.service`) en una VM Ubuntu 26.04 LTS. No se usó Container-Optimized OS porque el host necesita `gcloud` (secretos), `certbot` y systemd.
 - **Secretos.** `cargar_entorno.sh` los trae de Secret Manager a `/run` (tmpfs) en cada arranque, con una cuenta de servicio que solo lee esos tres secretos. No hay secretos en la imagen ni en el disco de la VM.
-- **Superficie.** Solo `chan_pjsip` (`chan_sip` y los demás canales no se cargan), AMI apagado, CDR y CEL apagados (el registro es `invoke.evento`, ADR-002), ARI en la IP privada, SIP 5060 solo desde el proveedor, WSS con certificado de Let's Encrypt y renovación que espera a que no haya canales. Lo que se carga está en `modules.conf` con el motivo de cada exclusión.
+- **Superficie.** Solo `chan_pjsip` (en Asterisk 22 ya no existe `chan_sip`), AMI apagado, CDR y CEL apagados (el registro es `invoke.evento`, ADR-002), sin MWI, música en espera, ADSI ni STIR/SHAKEN, ARI en la IP privada, SIP 5060 solo desde el proveedor, WSS con certificado de Let's Encrypt y renovación que espera a que no haya canales. Lo que se carga está en `modules.conf` con el motivo de cada exclusión, y el arranque no deja errores ni advertencias en el log.
 - **Endpoints.** Los de los puestos son realtime desde Postgres, con un usuario de solo lectura, porque la API rota la credencial en cada sesión (DI-12) y Asterisk no tiene que recargar nada. El trunk y los transportes van en archivo: no cambian en operación.
 - **NAT.** GCE hace NAT 1:1, así que el PBX declara su IP pública (`external_media_address` y `external_signaling_address` hacia afuera de `10.0.0.0/8`) y publica como candidato ICE de host la IP pública mapeada (`rtp.conf`). No hace falta STUN en el PBX (se quitó `STUN_HOST`).
-- **Prueba.** Hay un dialplan de laboratorio (`laboratorio/extensions_laboratorio.conf`) que simula la PSTN con canales Local: persona, ocupado, no contesta, contestador e inexistente. Con él, `scripts/probar_pbx.py` recorre los flujos de ARI contra la misma imagen. Se activa solo con `INVOKE_PBX_LABORATORIO=1`, nunca en producción.
-- **Alternativas descartadas.** Compilar Asterisk 22 desde el código: más reciente, pero sin una prueba equivalente hecha y con un proceso de construcción que mantener; queda como el camino de P-15. Asterisk instalado directo en la VM sin contenedor: la configuración quedaría fuera del ciclo de versiones del repositorio. Un PBX administrado de terceros: contradice ADR-003 (control por ARI) y el costo de licencia que motiva el proyecto.
+- **Prueba.** Hay un dialplan de laboratorio (`laboratorio/extensions_laboratorio.conf`) que simula la PSTN con canales Local: persona, ocupado, no contesta, contestador e inexistente. Con él, `scripts/probar_pbx.py` recorre los flujos de ARI contra la misma imagen. Se activa solo con `INVOKE_PBX_LABORATORIO=1`, nunca en producción. Se corre antes de cada cambio en `infra/asterisk` o en `services/ari`, y después de cada reconstrucción de la imagen.
+- **Alternativas descartadas.** Quedarse en Asterisk 20: obliga a migrar en pleno piloto. Compilar Asterisk 22 oficial: parches más rápidos, pero un proceso de construcción que mantener y sin Opus libre; queda como salida si un aviso de seguridad no llega al paquete. Asterisk instalado directo en la VM sin contenedor: la configuración quedaría fuera del ciclo de versiones del repositorio. Un PBX administrado de terceros: contradice ADR-003 (control por ARI) y el costo de licencia que motiva el proyecto.
 
 ## Decisiones de implementación
 
@@ -180,7 +182,7 @@ Lo que los documentos dejaron sin precisar y el código resolvió. Las provisori
 | DI-28 | Las rutas del puesto que leen respuestas, inician la encuesta, evalúan cuotas o clasifican exigen que el caso sea del encuestador, o que la llamada clasificada sea suya (encargo D4). | `estacion._exigir_caso_propio` | Tomada |
 | DI-29 | Los reportes (clasificación de casos, productividad, abandono, contacto observado) leen el diccionario de la versión del estudio: `estado`, `simbolo` y `efecto_caso`, sin códigos literales (encargo D5). Quedan dos literales con su test: `UD` para el caso nunca resuelto al cierre (definición del documento de fórmulas) y 31 en el conteo de contestadores detectados, porque el catálogo no tiene un atributo que lo distinga del 9. Siguen con literales, también testeados, dos invariantes de la base: "solo 4 habilita encuesta" y la marca de abandonada previa (30). | `0011_reportes_leen_diccionario.sql` | Tomada |
 | DI-30 | Robustez: las expresiones del cuestionario tienen un límite de profundidad (64) además del de nodos, gemelo en Python y JS, y una definición anidada de más da 422 con mensaje (M1). La API convierte toda excepción en una respuesta JSON (500, o 503 si el pool de conexiones se agotó) (M2). El pool tiene tamaño y espera explícitos (`INVOKE_DB_POOL`, `INVOKE_DB_ESPERA_S`) y la concurrencia de Functions coincide con él (M3). La sala recalcula solo la foto de los estudios que cambiaron (M4). | `expresiones.py`/`.js`, `api.py`, `db.py`, `services/sala` | Tomada |
-| DI-31 | **El AMD entra por ARI, no por el dialplan.** Toda llamada se origina hacia la aplicación Stasis (`amd,<llamada>` o `cliente,<llamada>`). En la de power y predictivo, `ari` registra la atención y le pasa el canal al dialplan con `continue` (`invoke-amd`), que corre `AMD()` y vuelve a Stasis con el resultado (`cliente,<llamada>,<AMDSTATUS>`). Originar directo al dialplan perdía los eventos de la atención (verificado contra Asterisk 20.6). | `services/ari/main.py`, `traductor.py`, `extensions.conf` | Tomada |
+| DI-31 | **El AMD entra por ARI, no por el dialplan.** Toda llamada se origina hacia la aplicación Stasis (`amd,<llamada>` o `cliente,<llamada>`). En la de power y predictivo, `ari` registra la atención y le pasa el canal al dialplan con `continue` (`invoke-amd`), que corre `AMD()` y vuelve a Stasis con el resultado (`cliente,<llamada>,<AMDSTATUS>`). Originar directo al dialplan perdía los eventos de la atención (verificado contra Asterisk 20.6 y 22.5). | `services/ari/main.py`, `traductor.py`, `extensions.conf` | Tomada |
 | DI-32 | El resultado `NOTSURE` del AMD se trata como persona: es preferible un encuestador que oye un contestador (y lo clasifica como 32, falso positivo) a cortarle a una persona. | `traductor.py` | Tomada |
 | DI-33 | En un abandono, el mensaje de disculpas se reproduce entero y recién al terminar (`PlaybackFinished`) se corta. Antes se cortaba al empezar y la persona no oía nada. Si el mensaje no se puede reproducir, se corta igual. En producción el PBX no arranca sin el archivo. | `traductor.py`, `entrypoint.sh` | Tomada |
 | DI-34 | Un encuestador con un caso sin clasificar no puede tomar casos de otro estudio ni iniciar sesión en otro estudio hasta clasificarlo. Antes, el caso pendiente "cruzaba" de estudio. | `0012_caso_pendiente_de_otro_estudio.sql`, `estacion.iniciar_sesion` | Tomada |
@@ -189,10 +191,11 @@ Lo que los documentos dejaron sin precisar y el código resolvió. Las provisori
 
 ### Hallazgos de la validación contra Asterisk real
 
-El código de telefonía se había escrito contra la documentación de ARI. Al correrlo contra Asterisk 20.6 (el mismo paquete de producción, con la configuración renderizada igual que en producción) aparecieron estos problemas, todos corregidos. Resultado final: `scripts/probar_pbx.py`, 44 de 44.
+El código de telefonía se había escrito contra la documentación de ARI. Se corrió dos veces contra Asterisk real, con la configuración renderizada igual que en producción: primero contra Asterisk 20.6 (Ubuntu 24.04) y después contra Asterisk 22.5.2 (Ubuntu 26.04), la versión de producción (ADR-013). Aparecieron estos problemas, todos corregidos. Resultado final en las dos versiones: `scripts/probar_pbx.py`, 44 de 44.
 
 | Hallazgo | Efecto | Corrección |
 | --- | --- | --- |
+| **Asterisk 20.6** | | |
 | `noload => manager.so` no apaga AMI: el módulo es parte del núcleo | AMI quedaba en su configuración por defecto | `manager.conf` con `enabled = no` |
 | `res_pgsql.conf` sin la sección `[general]` | Realtime no conectaba: ningún puesto podía registrarse | Sección `[general]` y usuario `asterisk_rt_login` |
 | `sorcery.conf` sin las fuentes de archivo | El trunk y los transportes de `pjsip.conf` desaparecían al activar realtime | Fuente `config` antes de `realtime` para cada objeto |
@@ -205,6 +208,12 @@ El código de telefonía se había escrito contra la documentación de ARI. Al c
 | Caso pendiente en otro estudio | El encuestador arrastraba un caso de un estudio a otro | DI-34 |
 | `CREATE OR REPLACE` de una función `SECURITY DEFINER` | Perdía el atributo y la aplicación no podía asignar | La migración `0012` lo vuelve a fijar; queda como regla para las próximas |
 | `envsubst` sin lista | Dialplan roto en silencio | DI-36 |
+| **Asterisk 22.5** | | |
+| Sin init, nadie crea `/var/run/asterisk` | El contenedor no arrancaba | Lo crea `entrypoint.sh` |
+| El paquete de Ubuntu 26.04 no trae `/var/spool/asterisk/recording` | ARI respondía 500 al grabar: llamadas sin grabación | Lo crea `entrypoint.sh` |
+| `res_pjsip_mwi` consulta la columna `mailboxes` de los endpoints realtime al arrancar | Error de la base en cada arranque | MWI fuera (no hay buzones) |
+| El paquete ya no trae música en espera; `users.conf`, ADSI y STIR/SHAKEN generan advertencias | Ruido en el log | Módulos fuera y `users.conf` borrado en la imagen. El arranque queda sin errores ni advertencias |
+| La prueba usaba la CLI de Asterisk del host | No servía con el PBX en un contenedor | `LAB_ASTERISK_CLI` en `scripts/probar_pbx.py` |
 
 
 Ninguno bloquea arrancar la prueba de audio; algunos sí bloquean el piloto.
@@ -225,7 +234,7 @@ Ninguno bloquea arrancar la prueba de audio; algunos sí bloquean el piloto.
 | P-12 | Qué encuestadores arrancan con Opus habilitado, si alguno. El valor por defecto es ninguno hasta que la prueba de audio (P-02) diga lo contrario. | Campo | — |
 | P-13 | Confirmar cómo se declara al cliente un «No volver a llamar»: el diccionario lo clasifica como elegibilidad desconocida (UD) y no como rechazo; con `e = 1` la tasa de respuesta no cambia, pero la de rechazo sí. Está implementado según el documento de fórmulas. | Investigación | Primer informe con tasas |
 | P-14 | La política de casos fuera de marco (control 3) todavía dice que las completas derivadas "entran con prioridad al muestreo de grabación". Con H2 ya no hay muestreo: conviene actualizar el texto a "revisión prioritaria de su grabación", que es lo que hace el sistema. | Investigación | — |
-| P-15 | Pasar el PBX a Asterisk 22 LTS antes de que termine el soporte de seguridad de Asterisk 20 (octubre de 2027 según el calendario publicado; confirmarlo). Implica construir la imagen con otra fuente y repetir la prueba de laboratorio. | Sistemas | Antes de oct. 2027 |
+| P-15 | ~~Pasar el PBX a Asterisk 22 LTS.~~ **Cerrado**: el PBX usa Asterisk 22 de Ubuntu 26.04 (ADR-013), validado 44 de 44. | — | — |
 
 ## Encargo de cierre de la Fase 1
 

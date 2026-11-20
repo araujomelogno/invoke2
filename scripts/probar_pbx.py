@@ -15,6 +15,8 @@ con un puesto real (docs/despliegue.md, verificación).
 Requisitos: Asterisk con la configuración de infra/asterisk + el archivo de
 laboratorio, `services/ari/main.py` corriendo con INVOKE_TRUNK=Local/{numero}@invoke-lab-pstn,
 y las mismas variables de entorno (DATABASE_URL, ARI_URL, ARI_USUARIO, ARI_CLAVE).
+Opcionales: LAB_ASTERISK_CLI (cómo llegar a la CLI de Asterisk; por defecto
+`asterisk`) y LAB_REINICIO_ARI (comando que reinicia el servicio ari).
 
     python scripts/probar_pbx.py
 """
@@ -130,13 +132,19 @@ def conectar_puesto(u: Usuario, e: dict, disponible: bool = True) -> bool:
 
 
 def cli_asterisk(comando: str) -> str | None:
-    """Salida de la CLI de Asterisk si el script corre en el PBX; None si no."""
+    """Salida de la CLI de Asterisk; None si no hay cómo llegar a ella.
+
+    LAB_ASTERISK_CLI dice cómo invocarla: por defecto `asterisk` (el script corre en
+    el PBX); con el PBX en un contenedor, `docker exec invoke-pbx-lab asterisk`."""
+    import os
+    import shlex
     import shutil
     import subprocess
 
-    if not shutil.which("asterisk"):
+    base = shlex.split(os.environ.get("LAB_ASTERISK_CLI", "asterisk"))
+    if not shutil.which(base[0]):
         return None
-    return subprocess.run(["asterisk", "-rx", comando], capture_output=True, text=True, timeout=10).stdout
+    return subprocess.run([*base, "-rx", comando], capture_output=True, text=True, timeout=10).stdout
 
 
 def llamar_preview(u: Usuario) -> tuple[dict, str]:

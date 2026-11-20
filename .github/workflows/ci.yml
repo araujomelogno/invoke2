@@ -27,4 +27,4 @@ jobs:
       - name: Tests JS (baterías compartidas con Python)
         run: node --test tests/js/*.test.mjs
       - name: Chequeo de tipos del frontend (sin build)
-        run: npx --yes typescript@5.6.3 tsc -p .
+        run: npx --yes -p typescript@5.6.3 tsc -p .

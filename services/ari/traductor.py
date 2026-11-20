@@ -82,7 +82,7 @@ class Traductor:
             self._destruido(canal, ev.get("cause"), ev.get("timestamp"))
         elif tipo == "PlaybackFinished":
             # El mensaje de disculpas terminó: recién ahora se corta (antes se cortaba al
-            # empezar y la persona no oía nada; verificado contra Asterisk 20.6).
+            # empezar y la persona no oía nada; verificado contra Asterisk 20.6 y 22.5).
             canal_a_colgar = self.colgar_al_terminar.pop((ev.get("playback") or {}).get("id", ""), None)
             if canal_a_colgar:
                 self.puerto.colgar(canal_a_colgar)

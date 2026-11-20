@@ -34,7 +34,7 @@ log = logging.getLogger("invoke.ari")
 def es_llamada(canal: str | None) -> bool:
     """Las llamadas de INVOKE se originan con channelId = llamada_id (un UUID). Los demás
     canales (patas de puesto, snoop, mitades ";2" de los Local) no son llamadas y no se
-    buscan en la base (verificado contra Asterisk 20.6: rompían la consulta)."""
+    buscan en la base (verificado contra Asterisk 20.6 y 22.5: rompían la consulta)."""
     try:
         uuid.UUID(str(canal))
         return True
@@ -150,7 +150,7 @@ def ejecutar_comando(puerto: PuertoReal, cmd: dict, traductor: Traductor | None 
         # Toda llamada se origina hacia la aplicación: así queda suscripta desde que nace y
         # su ChannelDestroyed llega siempre, también si nunca atienden. En power y
         # predictivo entra primero como "amd" y el traductor la manda al dialplan a
-        # pasar por AMD() (verificado contra Asterisk 20.6: originada directo al dialplan,
+        # pasar por AMD() (verificado contra Asterisk 20.6 y 22.5: originada directo al dialplan,
         # su fin nunca llegaba y la llamada quedaba sin terminar ni clasificar).
         rol = "amd" if d.get("amd") else "cliente"
         params.update({"app": cfg.ari_app, "appArgs": f"{rol},{llamada}"})

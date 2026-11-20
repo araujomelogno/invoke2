@@ -11,7 +11,7 @@ flowchart LR
   N[Navegador] -->|HTTPS| F[Firebase<br/>Hosting, Auth, Functions]
   N -->|WebSocket| S[Cloud Run: sala]
   N -->|SIP/WSS, SRTP| T[coturn]
-  T --> A[Asterisk 20 en VM]
+  T --> A[Asterisk 22 en VM]
   F -->|VPC| PG[(Cloud SQL Postgres)]
   S --> PG
   ARI[Cloud Run: ari] --> PG
@@ -29,8 +29,8 @@ flowchart LR
 | ari (escucha de Asterisk) | Cloud Run, interno | **exactamente 1** | `services/ari` |
 | pacer (Fase 2) | Cloud Run, interno | **exactamente 1** | `services/pacer` |
 | Base | Cloud SQL Postgres 16, IP privada | 2 vCPU / 8 GB para empezar | `db/migrations` |
-| PBX (Asterisk 20) | Compute Engine, Ubuntu 24.04 + Docker bajo systemd | e2-standard-2, 50 GB | `infra/asterisk` |
-| TURN | Compute Engine, Ubuntu 24.04 + Docker | e2-small | `infra/coturn` |
+| PBX (Asterisk 22) | Compute Engine, Ubuntu 26.04 + Docker bajo systemd | e2-standard-2, 50 GB | `infra/asterisk` |
+| TURN | Compute Engine, Ubuntu 26.04 + Docker | e2-small | `infra/coturn` |
 
 **Por qué ari y pacer van con exactamente una instancia.** Los dos son consumidores únicos: ari tiene el único WebSocket de eventos contra Asterisk y pacer es un lazo de control con temporizadores. Dos instancias originarían llamadas dos veces. Se despliegan con `--min-instances 1 --max-instances 1` y CPU siempre asignada.
 
@@ -149,8 +149,8 @@ El PBX es parte del sistema, no un servicio externo: se despliega desde `infra/a
 
 ```mermaid
 flowchart LR
-  subgraph VM pbx [VM pbx · Ubuntu 24.04]
-    SD[systemd: invoke-pbx] --> C[Contenedor invoke-pbx<br/>Asterisk 20 · red del host]
+  subgraph VM pbx [VM pbx · Ubuntu 26.04]
+    SD[systemd: invoke-pbx] --> C[Contenedor invoke-pbx<br/>Asterisk 22 · red del host]
     CE[cargar_entorno.sh] -->|/run/invoke-pbx.env| SD
     K[/etc/invoke/keys<br/>certificado/] --> C
     SN[/etc/invoke/sonidos<br/>disculpas/] --> C
@@ -166,9 +166,9 @@ flowchart LR
 
 | Elección | Valor | Por qué, en una línea |
 | --- | --- | --- |
-| Versión | Asterisk 20.6 del paquete de Ubuntu 24.04 (`asterisk`, `asterisk-modules`, `asterisk-core-sounds-es`) | Es lo que se validó módulo por módulo y con la prueba de laboratorio (44 de 44). Sin compilar. Ver soporte en 4.12 |
+| Versión | Asterisk 22 LTS (22.5.2) del paquete de Ubuntu 26.04 LTS (`asterisk`, `asterisk-modules`, `asterisk-core-sounds-es`) | LTS con soporte hasta 2029; el paquete trae el Opus de código abierto. Se validó módulo por módulo y con la prueba de laboratorio (44 de 44). Sin compilar. Ver 4.12 |
 | Empaquetado | Imagen Docker propia, `--network host`, bajo systemd | La configuración viaja con el repositorio; la red del host evita NAT de Docker sobre 10.000 puertos RTP |
-| VM | Ubuntu 24.04 LTS, e2-standard-2, disco 50 GB | Hace falta `gcloud`, `certbot` y systemd en el host; Container-Optimized OS no los trae |
+| VM | Ubuntu 26.04 LTS, e2-standard-2, disco 50 GB | Hace falta `gcloud`, `certbot` y systemd en el host; Container-Optimized OS no los trae |
 | Canal SIP | Solo `chan_pjsip` (`chan_sip` no se carga) | Único canal mantenido; WebRTC y realtime |
 | Control | Solo ARI. AMI deshabilitado (`manager.conf`) | ADR-003 |
 | Endpoints de los puestos | Realtime desde Postgres (`asterisk.ps_*`, `sorcery.conf`), usuario de solo lectura | La API rota la credencial SIP en cada inicio de sesión (DI-12) sin recargar Asterisk |
@@ -227,11 +227,13 @@ done
 ```bash
 gcloud compute instances create pbx --zone=${REGION}-a --machine-type=e2-standard-2 \
   --network-interface=subnet=invoke-sub,private-network-ip=10.10.0.10,address=pbx-ip \
-  --tags=pbx --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
+  --tags=pbx --image-family=ubuntu-2604-lts-amd64 --image-project=ubuntu-os-cloud \
   --boot-disk-size=50GB --boot-disk-type=pd-balanced \
   --service-account=invoke-pbx@$PROYECTO.iam.gserviceaccount.com --scopes=cloud-platform
 gcloud compute addresses describe pbx-ip --region=$REGION --format='value(address)'
 ```
+
+Si la familia de imagen no existe con ese nombre, `gcloud compute images list --project=ubuntu-os-cloud --filter="family~2604"` muestra la vigente. El host solo corre Docker, `certbot` y `gcloud`: Asterisk viene en la imagen, que es la que fija la versión.
 
 Con esa IP pública se crea el registro DNS `A pbx.<dominio>` y se le avisa al proveedor si autentica por IP. Después, en la VM (SSH solo por IAP):
 
@@ -317,14 +319,14 @@ Después se despliega el servicio `ari` (paso 7) con `ARI_URL=http://10.10.0.10:
 
 ```bash
 A="sudo docker exec invoke-pbx asterisk -rx"
-$A "core show version"                     # Asterisk 20.x
+$A "core show version"                     # Asterisk 22.x
 $A "pjsip show transports"                 # transport-udp y transport-wss
 $A "pjsip show contacts"                   # trunk/sip:… con estado Avail (qualify cada 30 s)
 $A "pjsip show registrations"              # solo si el trunk usa registro: Registered
 $A "realtime show pgsql status"            # conectado a la base
 $A "http show status"                      # 8088 en la IP privada, 8089 con TLS
 $A "ari show apps"                         # invoke, una vez que el servicio ari se conectó
-$A "module show like chan_sip"             # 0 módulos: chan_sip no se carga
+$A "module show like res_pjsip_mwi"        # 0 módulos: sin buzones no hay MWI
 sudo ss -lntup | grep asterisk             # solo 5060/udp, 10.10.0.10:8088 y *:8089 (+ RTP)
 ```
 
@@ -389,15 +391,16 @@ docker build -t invoke-pbx:actual infra/asterisk
 docker run -d --name invoke-pbx-lab --network host --env-file lab/pbx.env \
   -v $PWD/lab/keys:/run/invoke/keys:ro invoke-pbx:actual
 
-# Servicio ari apuntando a la PSTN simulada, y la prueba
+# Servicio ari apuntando a la PSTN simulada, y la prueba (la CLI de Asterisk está en el contenedor)
 export ARI_URL=http://$IP:8088/ari ARI_USUARIO=invoke ARI_CLAVE=lab \
   INVOKE_TRUNK='Local/{numero}@invoke-lab-pstn'
 PORT=8790 python services/ari/main.py > lab/ari.log 2>&1 & echo $! > lab/ari.pid
+LAB_ASTERISK_CLI="docker exec invoke-pbx-lab asterisk" \
 LAB_REINICIO_ARI="kill \$(cat lab/ari.pid); sleep 1; PORT=8790 python services/ari/main.py >> lab/ari.log 2>&1 & echo \$! > lab/ari.pid" \
   python scripts/probar_pbx.py
 ```
 
-El trunk del laboratorio apunta a un puerto donde no hay nadie: `pjsip show contacts` lo muestra `Unavailable` y es lo esperado. En `lab/ari.log` no tiene que haber errores; el único aviso esperado es que `GRABACIONES_BUCKET` no está configurado (la prueba sube a un bucket local).
+El trunk del laboratorio apunta a un puerto donde no hay nadie: `pjsip show contacts` lo muestra `Unavailable` y es lo esperado. En `lab/ari.log` no tiene que haber errores; el único aviso esperado es que `GRABACIONES_BUCKET` no está configurado (la prueba sube a un bucket local). En el log de Asterisk puede aparecer `No audio available on Recorder`: en el laboratorio las llamadas no tienen audio real, y la grabación se registra y se sube igual.
 
 **Qué no cubre el laboratorio** (queda para la prueba con personas, paso 10, y P-01): el trunk del proveedor, el audio real del navegador (SIP.js, ICE, DTLS-SRTP, TURN) y la negociación de Opus en un navegador.
 
@@ -411,7 +414,8 @@ El trunk del laboratorio apunta a un puerto donde no hay nadie: `pjsip show cont
 | Actualizar la configuración o la versión | `git -C /opt/invoke checkout <etiqueta>`, `docker build -t invoke-pbx:actual infra/asterisk`, `systemctl restart invoke-pbx` **fuera del horario de campo**: reiniciar corta todas las llamadas y las patas de los puestos (los navegadores reconectan solos y `ari` recupera los puestos desde la base) |
 | Rotar `ARI_CLAVE` | Versión nueva en Secret Manager, `systemctl restart invoke-pbx` y redesplegar `ari` |
 | Rotar `TRUNK_CLAVE` o `DB_CLAVE_ASTERISK` | Versión nueva (y `ALTER ROLE asterisk_rt_login PASSWORD …` en la base) y `systemctl restart invoke-pbx` |
-| Parches del sistema | `unattended-upgrades` de Ubuntu (viene activo). La imagen se reconstruye para tomar parches de Asterisk |
+| Parches del sistema | `unattended-upgrades` de Ubuntu en el host (viene activo) |
+| Parches de Asterisk | Una vez por mes, o cuando Ubuntu publique un aviso de seguridad del paquete `asterisk`: reconstruir la imagen con `docker build --pull --no-cache`, correr la prueba de laboratorio y reiniciar fuera del horario de campo. `$A "core show version"` dice cuál quedó |
 
 Qué vigilar, además de la tabla de "Qué mirar en el día a día":
 
@@ -429,7 +433,7 @@ Se recomienda una alerta de Cloud Monitoring sobre disco y CPU (agente de operac
 - **Superficie expuesta**: SIP 5060/udp solo desde el proveedor, WSS 8089/tcp y RTP 10000–20000/udp públicos. ARI solo en la IP privada y solo desde el conector. AMI apagado. SSH solo por IAP.
 - **Sin anónimos**: el contexto de entrada del trunk (`invoke-entrante`) rechaza todo, y un endpoint desconocido no tiene contexto. Los puestos se autentican con una credencial efímera que la base guarda como hash (DI-12), y el dialplan solo deja entrar a `sala-N` al endpoint `pN` (ADR-011).
 - **Escaneos SIP**: con 5060 cerrado salvo para el proveedor, el ruido llega por WSS, que exige TLS y credencial. Si aparecen intentos repetidos en el log, `fail2ban` sobre el journal es opcional.
-- **Soporte**: Asterisk 20 es LTS; a fines de 2026 está en su etapa de solo parches de seguridad, que según el calendario publicado termina en octubre de 2027 (verificarlo en la wiki de Asterisk). El paquete de Ubuntu está en *universe*: recibe parches de seguridad de la comunidad, no de Canonical, salvo con Ubuntu Pro. Antes de esa fecha hay que pasar a Asterisk 22 LTS y repetir la prueba de laboratorio (P-15).
+- **Soporte**: Asterisk 22 es LTS: según el calendario publicado tiene soporte completo hasta octubre de 2028 y parches de seguridad hasta octubre de 2029 (verificarlo en la wiki de Asterisk). Ubuntu 26.04 LTS tiene soporte estándar hasta 2031. El paquete de Asterisk está en *universe*: recibe parches de seguridad de la comunidad, no de Canonical (salvo con Ubuntu Pro), y va atrasado respecto de Asterisk oficial (22.5.2 contra 22.10 a fines de 2026). Si un aviso de seguridad de Asterisk no llega al paquete en un plazo razonable, la salida es compilar la versión oficial en la imagen (ADR-013, alternativas).
 
 ## 5. TURN (coturn)
 
@@ -441,7 +445,7 @@ gcloud secrets add-iam-policy-binding TURN_SECRETO \
   --member=serviceAccount:invoke-turn@$PROYECTO.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor
 gcloud compute instances create turn --zone=${REGION}-a --machine-type=e2-small \
   --network-interface=subnet=invoke-sub,address=turn-ip --tags=turn \
-  --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
+  --image-family=ubuntu-2604-lts-amd64 --image-project=ubuntu-os-cloud \
   --service-account=invoke-turn@$PROYECTO.iam.gserviceaccount.com --scopes=cloud-platform
 ```
 

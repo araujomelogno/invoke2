@@ -1,13 +1,16 @@
-# PBX de INVOKE 2: Asterisk 20.6 de Ubuntu 24.04 con chan_pjsip, ARI, AMD, Opus de
-# código abierto y realtime en Postgres. Verificado módulo por módulo y con
-# scripts/probar_pbx.py contra este mismo paquete (docs/decisiones.md, ADR-013).
+# PBX de INVOKE 2: Asterisk 22 LTS (22.5.2) de Ubuntu 26.04 LTS con chan_pjsip, ARI,
+# AMD, Opus de código abierto (codec_opus_open_source, incluido en el paquete) y
+# realtime en Postgres. Verificado módulo por módulo y con scripts/probar_pbx.py
+# contra este mismo paquete (docs/decisiones.md, ADR-013).
 #
 # Los .conf de este directorio son plantillas: entrypoint.sh las renderiza con las
 # variables de entorno (los secretos llegan desde Secret Manager, nunca en la imagen).
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       asterisk asterisk-modules asterisk-core-sounds-es gettext-base ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # users.conf de ejemplo del paquete: obsoleto en Asterisk 22 y sin uso acá
+    && rm -f /etc/asterisk/users.conf
 COPY *.conf /etc/asterisk/plantillas/
 COPY laboratorio/ /etc/asterisk/plantillas/laboratorio/
 COPY entrypoint.sh instalar_archivos.sh /usr/local/bin/
