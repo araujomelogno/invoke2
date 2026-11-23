@@ -10,7 +10,7 @@ La PSTN y el navegador se simulan con canales Local
 (infra/asterisk/laboratorio/extensions_laboratorio.conf), así que no hace falta
 trunk ni WebRTC. Lo que esta prueba NO cubre: el audio real del navegador
 (SIP.js, ICE, TURN, códec negociado) y el trunk del proveedor; eso se verifica
-con un puesto real (docs/despliegue.md, verificación).
+con un puesto real (docs/despliegue.md, paso 14).
 
 Requisitos: Asterisk con la configuración de infra/asterisk + el archivo de
 laboratorio, `services/ari/main.py` corriendo con INVOKE_TRUNK=Local/{numero}@invoke-lab-pstn,

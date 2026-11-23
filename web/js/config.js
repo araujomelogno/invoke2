@@ -1,6 +1,6 @@
 // Configuración pública del cliente web. La config de Firebase NO es secreta
 // (identifica el proyecto); los secretos viven en Secret Manager, nunca acá.
-// En cada entorno se reemplaza este archivo en el despliegue (ver docs/despliegue.md).
+// En cada entorno se completa este archivo en el despliegue (docs/despliegue.md, paso 12).
 window.INVOKE_CONFIG = window.INVOKE_CONFIG || {
   firebase: {
     apiKey: 'TU_API_KEY',
