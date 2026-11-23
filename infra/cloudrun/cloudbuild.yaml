@@ -1,0 +1,27 @@
+# Construye las imágenes de los tres servicios de Cloud Run en Cloud Build (no hace
+# falta Docker en la máquina de quien despliega). Desde la raíz del repositorio:
+#
+#   gcloud builds submit --config infra/cloudrun/cloudbuild.yaml \
+#     --substitutions=_REGION=southamerica-east1,_ETIQUETA=$(git rev-parse --short HEAD) .
+#
+# Cada imagen queda en Artifact Registry con la etiqueta pedida (docs/despliegue.md, paso 11).
+substitutions:
+  _REGION: southamerica-east1
+  _ETIQUETA: actual
+steps:
+  - id: ari
+    name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/invoke/ari:${_ETIQUETA}', -f, infra/cloudrun/Dockerfile.ari, .]
+    waitFor: ['-']
+  - id: sala
+    name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/invoke/sala:${_ETIQUETA}', -f, infra/cloudrun/Dockerfile.sala, .]
+    waitFor: ['-']
+  - id: pacer
+    name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/invoke/pacer:${_ETIQUETA}', -f, infra/cloudrun/Dockerfile.pacer, .]
+    waitFor: ['-']
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/invoke/ari:${_ETIQUETA}'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/invoke/sala:${_ETIQUETA}'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/invoke/pacer:${_ETIQUETA}'

@@ -3,6 +3,10 @@
 # secretos de Secret Manager. Lo llama invoke-pbx.service antes de cada arranque.
 # El destino está en /run (tmpfs): los secretos no quedan en el disco de la VM.
 set -euo pipefail
+# En las imágenes de Ubuntu de GCE, gcloud es un snap (/snap/bin), y systemd no lo
+# tiene en el PATH con el que corre ExecStartPre.
+export PATH="$PATH:/snap/bin:/usr/lib/google-cloud-sdk/bin"
+command -v gcloud >/dev/null || { echo "No se encuentra gcloud (docs/despliegue.md, paso 6)" >&2; exit 1; }
 destino="$1"
 umask 077
 
@@ -13,7 +17,7 @@ source /etc/invoke/pbx.conf
 # Sin el certificado no arranca (el navegador exige WSS válido). El mensaje de
 # disculpas lo controla el contenedor: en el laboratorio puede faltar.
 for f in /etc/invoke/keys/pbx.crt /etc/invoke/keys/pbx.key; do
-  [[ -f "$f" ]] || { echo "Falta $f (docs/despliegue.md, PBX)" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Falta $f (docs/despliegue.md, paso 8)" >&2; exit 1; }
 done
 mkdir -p /etc/invoke/sonidos /var/lib/invoke/grabaciones
 

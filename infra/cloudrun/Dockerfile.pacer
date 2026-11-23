@@ -1,5 +1,5 @@
-# Cloud Run — servicio pacer. Se construye desde la raíz del repositorio:
-#   gcloud builds submit --tag $REGION-docker.pkg.dev/$PROYECTO/invoke/pacer -f infra/cloudrun/Dockerfile.pacer .
+# Cloud Run — servicio pacer. Se construye con infra/cloudrun/cloudbuild.yaml
+# (docs/despliegue.md, paso 11), desde la raíz del repositorio.
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
